@@ -22,9 +22,10 @@ from aws_cdk.custom_resources import Provider
 from cdk_nag import AwsSolutionsChecks, NagSuppressions
 
 
-model_id = "anthropic.claude-v2:1"
+#model_id = "anthropic.claude-v2:1"
+model_id = "anthropic.claude-instant-v1"
 visual_scene_detection_confidence_threshold = 98.0
-visual_text_detection_confidence_threshold = 90.0
+visual_text_detection_confidence_threshold = 98.0
 raw_folder = "raw"
 summary_folder = "summary"
 video_script_folder = "video_script"
@@ -104,7 +105,7 @@ class VideoUnderstandingSolutionStack(Stack):
             { "id": 'AwsSolutions-IAM5', "reason": 'Allow using <arn>* in the policy since video file names can vary'}
         ], True)
 
-         # Step function task to start the Rekognition label detection task to detect visual scenes
+        # Step function task to start the Rekognition label detection task to detect visual scenes
         start_rekognition_label_detection_sfn_task = _sfn_tasks.CallAwsService(
             self,
             "StartRekognitionLabelDetectionSfnTask",
@@ -119,11 +120,11 @@ class VideoUnderstandingSolutionStack(Stack):
                 },
                 "MinConfidence": visual_scene_detection_confidence_threshold,
             },
-            result_path="$.labelDetectionResult",
+            result_path="$.startLabelDetectionResult",
             iam_resources=["*"],
             additional_iam_statements=[
                 _iam.PolicyStatement(
-                    actions=["s3:getObject", "s3:listBucket"], 
+                    actions=["s3:GetObject", "s3:ListBucket"], 
                     resources=[
                         f"arn:aws:s3:::{video_bucket_s3.bucket_name}", 
                         f"arn:aws:s3:::{video_bucket_s3.bucket_name}/{raw_folder}/*"
@@ -131,6 +132,35 @@ class VideoUnderstandingSolutionStack(Stack):
                 )
             ],
         )
+
+        # Step function task to check the status of the Rekognition label detection task to detect visual scenes
+        get_rekognition_label_detection_sfn_task = _sfn_tasks.CallAwsService(
+            self,
+            "GetRekognitionLabelDetectionSfnTask",
+            service="rekognition",
+            action="getLabelDetection",
+            parameters={
+                "JobId.$": "$.startLabelDetectionResult.JobId",
+                "MaxResults": 1
+            },
+            result_path="$.labelDetectionResult",
+            result_selector={
+                "JobId.$": "$.JobId",
+                "JobStatus.$": "$.JobStatus"
+            },
+            iam_resources=["*"],
+        )
+
+        label_detection_success = _sfn.Succeed(self, "Label detection is successful")
+        label_detection_failure = _sfn.Fail(self, "Label detection is failed")
+        label_detection_choice = _sfn.Choice(self, "Label detection choice")
+        label_detection_success_condition = _sfn.Condition.string_equals("$.labelDetectionResult.JobStatus", "SUCCEEDED")
+        label_detection_failure_condition = _sfn.Condition.string_equals("$.labelDetectionResult.JobStatus", "FAILED")
+        label_detection_wait = _sfn.Wait(self, "Label detection wait",time=_sfn.WaitTime.duration(Duration.seconds(30))).next(get_rekognition_label_detection_sfn_task)
+
+        # Build the flow
+        start_rekognition_label_detection_sfn_task.next(get_rekognition_label_detection_sfn_task).next(label_detection_choice)
+        label_detection_choice.when(label_detection_success_condition, label_detection_success).when(label_detection_failure_condition,label_detection_failure).otherwise(label_detection_wait)
 
         # Step function task to start the Rekognition text detection task to detect visual texts
         start_rekognition_text_detection_sfn_task = _sfn_tasks.CallAwsService(
@@ -147,11 +177,11 @@ class VideoUnderstandingSolutionStack(Stack):
                 },
                 "Filters": {"WordFilter": {"MinConfidence": visual_text_detection_confidence_threshold}},
             },
-            result_path="$.textDetectionResult",
+            result_path="$.startTextDetectionResult",
             iam_resources=["*"],
             additional_iam_statements=[
                 _iam.PolicyStatement(
-                    actions=["s3:getObject", "s3:listBucket"], 
+                    actions=["s3:GetObject", "s3:ListBucket"], 
                     resources=[
                         f"arn:aws:s3:::{video_bucket_s3.bucket_name}", 
                         f"arn:aws:s3:::{video_bucket_s3.bucket_name}/{raw_folder}/*"
@@ -159,6 +189,35 @@ class VideoUnderstandingSolutionStack(Stack):
                 )
             ],
         )
+
+        # Step function task to check the status of the Rekognition text detection task to detect visual texts
+        get_rekognition_text_detection_sfn_task = _sfn_tasks.CallAwsService(
+            self,
+            "GetRekognitionTextDetectionSfnTask",
+            service="rekognition",
+            action="getTextDetection",
+            parameters={
+                "JobId.$": "$.startTextDetectionResult.JobId",
+                "MaxResults": 1
+            },
+            result_path="$.textDetectionResult",
+            result_selector={
+                "JobId.$": "$.JobId",
+                "JobStatus.$": "$.JobStatus"
+            },
+            iam_resources=["*"],
+        )
+
+        text_detection_success = _sfn.Succeed(self, "Text detection is successful")
+        text_detection_failure = _sfn.Fail(self, "Text detection is failed")
+        text_detection_choice = _sfn.Choice(self, "Text detection choice")
+        text_detection_success_condition = _sfn.Condition.string_equals("$.textDetectionResult.JobStatus", "SUCCEEDED")
+        text_detection_failure_condition = _sfn.Condition.string_equals("$.textDetectionResult.JobStatus", "FAILED")
+        text_detection_wait = _sfn.Wait(self, "Text detection wait",time=_sfn.WaitTime.duration(Duration.seconds(30))).next(get_rekognition_text_detection_sfn_task)
+
+        # Build the flow
+        start_rekognition_text_detection_sfn_task.next(get_rekognition_text_detection_sfn_task).next(text_detection_choice)
+        text_detection_choice.when(text_detection_success_condition, text_detection_success).when(text_detection_failure_condition, text_detection_failure).otherwise(text_detection_wait)
 
         # Step function task to start the Transcribe transcription task to extract human voice and transcribe it
         start_transcription_job_sfn_task = _sfn_tasks.CallAwsService(
@@ -176,21 +235,49 @@ class VideoUnderstandingSolutionStack(Stack):
                 "OutputBucketName": video_bucket_s3.bucket_name,
                 "OutputKey.$": f"States.Format('{transcription_root_folder}/{{}}.txt', $.videoS3Path)",
             },
-            result_path="$.transcriptionResult",
+            result_path="$.startTranscriptionResult",
             iam_resources=["*"],
             additional_iam_statements=[
                 _iam.PolicyStatement(
-                    actions=["s3:getObject", "s3:listBucket"], 
+                    actions=["s3:GetObject", "s3:ListBucket"], 
                     resources=[
                         f"arn:aws:s3:::{video_bucket_s3.bucket_name}", 
                         f"arn:aws:s3:::{video_bucket_s3.bucket_name}/{raw_folder}/*"
                     ]
                 ),
                 _iam.PolicyStatement(
-                    actions=["s3:putObject"], resources=[f"arn:aws:s3:::{video_bucket_s3.bucket_name}/{transcription_folder}/*"]
+                    actions=["s3:PutObject"], resources=[f"arn:aws:s3:::{video_bucket_s3.bucket_name}/{transcription_folder}/*"]
                 )
             ],
         )
+
+        # Step function task to check the status of the Transcribe job to transcribe human voice
+        get_transcription_job_sfn_task = _sfn_tasks.CallAwsService(
+            self,
+            "GetTranscriptionJobSfnTask",
+            service="transcribe",
+            action="getTranscriptionJob",
+            parameters={
+                "TranscriptionJobName.$": "$.startTranscriptionResult.TranscriptionJob.TranscriptionJobName"
+            },
+            result_path="$.transcriptionResult",
+            result_selector={
+                "TranscriptionJobName.$": "$.TranscriptionJob.TranscriptionJobName",
+                "TranscriptionJobStatus.$": "$.TranscriptionJob.TranscriptionJobStatus"
+            },
+            iam_resources=[f"arn:aws:transcribe:{aws_region}:{aws_account_id}:transcription-job/*"],
+        )
+
+        transcription_success = _sfn.Succeed(self, "Transcription is successful")
+        transcription_failure = _sfn.Fail(self, "Transcription is failed")
+        transcription_choice = _sfn.Choice(self, "Transcription choice")
+        transcription_success_condition = _sfn.Condition.string_equals("$.transcriptionResult.TranscriptionJobStatus", "COMPLETED")
+        transcription_failure_condition = _sfn.Condition.string_equals("$.transcriptionResult.TranscriptionJobStatus", "FAILED")
+        transcription_wait = _sfn.Wait(self, "Transcription wait",time=_sfn.WaitTime.duration(Duration.seconds(30))).next(get_transcription_job_sfn_task)
+
+        # Build the flow
+        start_transcription_job_sfn_task.next(get_transcription_job_sfn_task).next(transcription_choice)
+        transcription_choice.when(transcription_success_condition, transcription_success).when(transcription_failure_condition, transcription_failure).otherwise(transcription_wait)
 
         parallel_sfn = _sfn.Parallel(self, "StartVideoAnalysisParallelSfn")
         parallel_sfn = parallel_sfn.branch(
@@ -274,6 +361,7 @@ class VideoUnderstandingSolutionStack(Stack):
                 )),
            role=main_analyzer_lambda_role,                                    
            timeout=Duration.minutes(15),
+           memory_size=2048,
            environment = {
                 'MODEL_ID': model_id,
                 'BUCKET_NAME': video_bucket_s3.bucket_name,
@@ -411,7 +499,7 @@ class VideoUnderstandingSolutionStack(Stack):
                 "WebUIPolicy": _iam.PolicyDocument(
                     statements=[
                         _iam.PolicyStatement(
-                            actions=["bedrock:InvokeModelWithResponseStream"],
+                            actions=["bedrock:InvokeModelWithResponseStream", "bedrock:InvokeModel"],
                             resources=[f"arn:aws:bedrock:{aws_region}::foundation-model/*"],
                             effect=_iam.Effect.ALLOW,
                         ),

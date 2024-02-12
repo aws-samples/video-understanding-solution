@@ -1,10 +1,8 @@
 #!/bin/bash
 
-if [ ! -d "venv" ]; then
-    virtualenv -p python3 venv
+if [ -d "venv" ]; then
+    source venv/bin/activate
 fi
-
-source venv/bin/activate
 
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
@@ -35,4 +33,6 @@ cd webui && zip -r ui_repo.zip src package.json package-lock.json amplify.yml pu
 
 cdk deploy --outputs-file ./deployment-output.json --context email=$email
 
-deactivate
+if [ -d "venv" ]; then
+    deactivate
+fi

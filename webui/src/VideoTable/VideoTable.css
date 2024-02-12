@@ -1,3 +1,6 @@
 .preserve-line-breaks {
     white-space: pre-wrap;
 }
+.chat-spinner{
+    margin-bottom: 5px;
+}

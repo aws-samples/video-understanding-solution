@@ -6,9 +6,10 @@ import Button from 'react-bootstrap/Button';
 import Form from 'react-bootstrap/Form';
 import InputGroup from 'react-bootstrap/InputGroup';
 import Pagination from 'react-bootstrap/Pagination';
+import Spinner from 'react-bootstrap/Spinner';
 
 import {ListObjectsV2Command, GetObjectCommand } from "@aws-sdk/client-s3"; 
-import { InvokeModelWithResponseStreamCommand } from "@aws-sdk/client-bedrock-runtime";
+import { InvokeModelWithResponseStreamCommand, InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
 import {getSignedUrl} from "@aws-sdk/s3-request-presigner"
 
 import Row from 'react-bootstrap/Row';
@@ -34,11 +35,14 @@ export class VideoTable extends Component {
     this.transcriptionFolder = props.transcriptionFolder
     this.videoScriptFolder = props.videoScriptFolder
     this.entitySentimentFolder = props.entitySentimentFolder
+    this.maxCharactersForChat = 5000
+    this.maxCharactersForVideoScript = 300000
+    this.maxCharactersForSingleLLMCall = 100000
+    this.estimatedCharactersPerToken = 4
 
     this.renderVideoTableBody = this.renderVideoTableBody.bind(this)
     this.render = this.render.bind(this)
     this.renderChat = this.renderChat.bind(this)
-    
   }
 
   async componentDidMount() {
@@ -78,6 +82,9 @@ export class VideoTable extends Component {
         videoScript: undefined,
         videoScriptShown: false,
         chats: [],
+        chatSummary: "",
+        chatLength: 0,
+        chatWaiting: false,
         url: undefined
       })
     }
@@ -163,73 +170,253 @@ export class VideoTable extends Component {
 
   handleChatInputChange(video, event) {
     const chatText = event.target.value
-    if(event.keyCode == 13) { // When Enter is pressed
+    if(event.keyCode == 13 && !event.shiftKey) { // When Enter is pressed without Shift
       video.chats.push({
         actor: "You",
         text: chatText
       })
+      video.chatLength += chatText.length // Increment the length of the chat
       this.setState({videos: this.state.videos})
       event.target.value = "" // Clear input field
-      this.retrieveChatResponse(video.index)
+      this.handleChat(video.index)
     }
   }
 
   renderChat(video) {
     return video.chats.map((chat, i) => { 
         return (
-          <Row><Col xs={1}><p align="left">{(chat.actor + " : ")}</p></Col><Col><p align="left">{chat.text}</p></Col></Row>
+          <Row key={`video-chat-${video.index}-${i}`}><Col xs={1}><p align="left">{(chat.actor + " : ")}</p></Col><Col><p align="left">{chat.text}</p></Col></Row>
         )
     })
   }
 
-  async retrieveChatResponse(videoIndex, target){
-    var video = this.state.videos[videoIndex]
-    if(video.chats.length <= 0) return // Ignore if no chats are there
-    if(video.chats[video.chats.length - 1].actor != "You") return // Ignore if last message was from bot
+  async retrieveAnswerForShortVideo(video, systemPrompt){
+    var [videoScriptPrompt, chatPrompt, closingPrompt] = ["","",""]
 
-    var prompt = ""
-    prompt += "\n\nHuman: You are an expert in analyzing video and you can answer questions about the video given the video script.\n\n"
-    prompt += "Below is the video script with information about the voice heard in the video, the visual scenes seen, and the visual text visible."
-    prompt += "The numbers on the left represents the seconds into the video where the information was extracted.\n"
-    prompt += "<VideoScript>\n" + video.videoScript + "</VideoScript>\n\n"
+    videoScriptPrompt += "Below is the video script with information about the voice heard in the video, the visual scenes seen, and the visual text visible."
+    videoScriptPrompt += "The numbers on the left represents the seconds into the video where the information was extracted.\n"
+    videoScriptPrompt += `<VideoScript>\n${video.videoScript}</VideoScript>\n\n`
 
-
-    for (const i in video.chats){
-      if (video.chats[i].actor == "You"){
-        if(video.chats.length == 1) {
-          prompt += video.chats[i].text
+    // If the chat history is not too long, then include the whole history in the prompt
+    // Otherwise, use the summary + last chat instead.
+    // However, when the summary is not yet generated (First generation is when characters exceed 5000), then use the whole history first
+    // The last scenario mentioned above may happen during the transition of <5000 characters to >5000 characters for the history
+    if (video.chatLength <= this.maxCharactersForChat || video.chatSummary == ""){ 
+      for (const i in video.chats){
+        if (video.chats[i].actor == "You"){
+          if(video.chats.length == 1) {
+            chatPrompt += video.chats[i].text
+          }else{
+            chatPrompt += "\n\nHuman: " + video.chats[i].text
+          }
         }else{
-          prompt += "\n\nHuman: " + video.chats[i].text
+          chatPrompt += "\n\nAssistant: " + video.chats[i].text
         }
-      }else{
-        prompt += "\n\nAssistant: " + video.chats[i].text
       }
+    }else{ // If the chat history is too long, so that we include the summary of the chats + last chat only.
+      chatPrompt += "You had a conversation with a user about that video script as summarized below.\n"
+      chatPrompt += `<ChatSummary>\n${video.chatSummary}\n</ChatSummary>\n`
+      chatPrompt += "Now the user comes back with a reply below.\n"
+      chatPrompt += `<Question>\n${video.chats[video.chats.length - 1].text}\n</Question>\n`
+      chatPrompt += "Answer the user's reply above directly, without any XML tag.\n"
     }
-    prompt += "\n\nAssistant:"
 
-    const payload = JSON.stringify({
-      prompt: prompt,
-      max_tokens_to_sample: 1000,
-    })
+    closingPrompt += "\n\nAssistant:"
 
+    const prompt = systemPrompt + videoScriptPrompt + chatPrompt + closingPrompt
     const input = { 
-      body: payload, 
+      body: JSON.stringify({
+        prompt: prompt,
+        max_tokens_to_sample: 1000,
+        stop_sequences: ["\nUser:"]
+      }), 
       modelId: this.modelId, 
       contentType: "application/json",
       accept: "application/json"
     };
-    const command = new InvokeModelWithResponseStreamCommand(input);
-    const response = await this.bedrockClient.send(command);
+    const response = await this.bedrockClient.send(new InvokeModelWithResponseStreamCommand(input));
 
+    await this.displayNewBotAnswerWithStreaming(video, response)
+  }
+
+  async retrieveAnswerForLongVideo(video, systemPrompt){
+    const numberOfFragments = parseInt(video.videoScript.length/this.maxCharactersForVideoScript) + 1
+
+    const estimatedTime = (numberOfFragments * 25/60).toFixed(1) // Assuming one LLM call is 25 seconds.
+    await this.displayNewBotAnswer(video, `Long video is detected. Estimated answer time is ${estimatedTime} minutes or sooner.`)
+
+    var [currentFragment, rollingAnswer] = [1,""]
+    // For every video fragment, try to find the answer to the question, if and not found just write partial answer and go to next iteration.
+    while(currentFragment <= numberOfFragments){
+      var [videoScriptPrompt, chatPrompt, instructionPrompt, partialAnswerPrompt] = ["","","",""]
+
+      // Construct the prompt containing the video script (the text representation of the current part of the video)
+      videoScriptPrompt += "The video script has information about the voice heard in the video, the visual scenes seen, and the visual text visible. "
+      videoScriptPrompt += "The numbers on the left represents the seconds into the video where the information was extracted.\n"
+      videoScriptPrompt += `Because the video is long, the video script is split into ${numberOfFragments} parts. `
+      if (currentFragment == numberOfFragments){
+        videoScriptPrompt += "Below is the last part of the video script.\n"
+      }else if (currentFragment == 1){
+        videoScriptPrompt += "Below is the first part of the video script.\n"
+      }else{
+        videoScriptPrompt += `Below is the part ${currentFragment.toString()} out of ${numberOfFragments} of the video script.\n`
+      }
+      
+      // The video script part
+      const currentVideoScriptFragment = video.videoScript.substring((currentFragment - 1)*this.maxCharactersForVideoScript, currentFragment*this.maxCharactersForVideoScript)
+      videoScriptPrompt += `<VideoScript>\n${currentVideoScriptFragment}\n</VideoScript>\n\n`
+      
+      // Add the conversation between user and bot for context
+      if (video.chatLength <= this.maxCharactersForChat || video.chatSummary == ""){ 
+        chatPrompt += "You had a conversation with a user as below. Your previous answers may be based on the knowledge of the whole video script, not only part of it.\n"
+        chatPrompt += "<ChatSummary>\n"
+        for (const i in video.chats){
+          if (video.chats[i].actor == "You"){
+            chatPrompt += `\nUser: ${video.chats[i].text}`
+          }else{
+            chatPrompt += `\nYou: ${video.chats[i].text}`
+          }
+        }
+        chatPrompt += "\n</ChatSummary>\n\n"
+      }else{ // If the chat history is too long, so that we include the summary of the chats + last chat only.
+        chatPrompt += "You had a conversation with a user as summarized below. Your previous answers may be based on the knowledge of the whole video script, not only part of it.\n"
+        chatPrompt += `<ChatSummary>\n${video.chatSummary}</ChatSummary>\n`
+        chatPrompt += "Now the user comes back with a reply below.\n"
+        chatPrompt += `<Question>\n${video.chats[video.chats.length - 1].text}\n</Question>\n\n`
+      }
+
+      // Add previous partial answer from previous parts of the videos to gather information so far
+      if (rollingAnswer != ""){
+        partialAnswerPrompt += "You also saved some partial answer from the previous video parts below. You can use this to provide the final answer or the next partial answer.\n"
+        partialAnswerPrompt += `<PreviousPartialAnswer>\n${rollingAnswer}\n</PreviousPartialAnswer>\n\n`
+      }
+
+      if (currentFragment == (numberOfFragments + 1)){
+        instructionPrompt += "Now, since there is no more video part left, provide your final answer directly without XML tag."
+      }else{
+        instructionPrompt += "When answering the question, do not use XML tags and do not mention about video script, chat summary, or partial answer.\n"
+        instructionPrompt += "If you have the final answer already, WRITE |BREAK| at the very end of your answer.\n"
+        instructionPrompt += "If you stil need the next part to come with final answer, then write any partial answer based on the current <VideoScript>, <ChatSummary>, <Question> if any, and <PreviousPartialAnswer>.\n" 
+        instructionPrompt += "This partial answer will be included when we ask you again right after this by giving the video script for the next part, so that you can use the current partial answer.\n"
+        instructionPrompt += `For question that needs you to see the whole video such as "is there any?", "does it have", "is it mentioned", DO NOT provide final answer until we give you all ${numberOfFragments} parts of the video script.\n`
+      }
+      instructionPrompt += "\n\nAssistant:"
+
+      const prompt = systemPrompt + videoScriptPrompt + chatPrompt + partialAnswerPrompt + instructionPrompt
+      const input = { 
+        body: JSON.stringify({
+          prompt: prompt,
+          max_tokens_to_sample: 1000,
+          stop_sequences: ["\nUser:"]
+        }), 
+        modelId: this.modelId, 
+        contentType: "application/json",
+        accept: "application/json"
+      };
+      const response = await this.bedrockClient.send(new InvokeModelCommand(input)); 
+      rollingAnswer = JSON.parse(new TextDecoder().decode(response.body)).completion
+
+      // When the answer is found without having to go through all video fragments, then break and make it as a final answer.
+      if (rollingAnswer.includes("|BREAK|")) {
+        rollingAnswer = rollingAnswer.replace("|BREAK|","")
+        break
+      }
+
+      currentFragment += 1
+    }
+
+    await this.displayNewBotAnswer(video, rollingAnswer)
+  }
+
+  async handleChat(videoIndex, target){
+    var video = this.state.videos[videoIndex]
+
+    if(video.chats.length <= 0) return // Ignore if no chats are there
+    if(video.chats[video.chats.length - 1].actor != "You") return // Ignore if last message was from bot
+
+    this.addChatWaitingSpinner(video)
+
+    var systemPrompt = "\n\nHuman: You are an expert in analyzing video and you can answer questions about the video given the video script. Answer in the same language as the question from user.\n"
+    systemPrompt += "Do not quote the whole video script row when answering. Assume the user is not aware of the video script. Also if you do not know, say do not know. Do not make up wrong answers.\n\n"
+   
+    if(video.videoScript.length < this.maxCharactersForSingleLLMCall){
+      await this.retrieveAnswerForShortVideo(video, systemPrompt) 
+    } else {
+      // Long video gets split into fragments for the video script. For each fragment, it goes to LLM to find the partial answer. 
+      await this.retrieveAnswerForLongVideo(video, systemPrompt)
+    }
+
+    await this.removeChatWaitingSpinner(video)
+    this.updateChatSummary(video)
+
+  }
+
+  async displayNewBotAnswer(video, text){
+    video.chats.push({actor: "Bot", text: text})
+    video.chatLength += text.length
+    this.setState({videos: this.state.videos})
+  }
+
+  async displayNewBotAnswerWithStreaming(video, response){
     video.chats.push({actor: "Bot", text: ""})
-
     for await (const event of response.body) {
         if (event.chunk && event.chunk.bytes) {
             const chunk = JSON.parse(Buffer.from(event.chunk.bytes).toString("utf-8"));
             video.chats[video.chats.length - 1].text += chunk.completion
+            video.chatLength += chunk.completion.length // Increment the length of the chat
             this.setState({videos: this.state.videos})
         }
     };
+  }
+
+  async removeChatWaitingSpinner(video){
+    video.chatWaiting = false
+    this.setState({videos: this.state.videos})
+  }
+
+  async addChatWaitingSpinner(video){
+    video.chatWaiting = true
+    this.setState({videos: this.state.videos})
+  }
+
+  async updateChatSummary(video){
+    // If the chats between bot and human is roughly more than 5000 characters (1250 tokens) then summarize the chats, otherwise ignore and return.
+    if (video.chatLength < this.maxCharactersForChat) return;
+
+    var prompt = "\n\nHuman: You are an expert in summarizing chat. The chat is between user and a bot. The bot answers questions about a video.\n"
+
+    if (video.chatSummary == ""){
+      prompt += "Find the chat below.\n<Chat>\n"
+      for (const i in video.chats){
+        if (video.chats[i].actor == "You"){
+            prompt += `\nUser: ${video.chats[i].text}`
+        }else{
+          prompt += `\nYou: ${video.chats[i].text}`
+        }
+      }
+      prompt += "\n</Chat>\nSummarize the chat in no longer than 1 page."
+    }else{
+      prompt += "Below is the summary of the chat so far.\n"
+      prompt += `<ChatSummary>\n${video.chatSummary}\n</ChatSummary>\n`
+      prompt += "You recently replied to the User as below.\n"
+      prompt += `<Reply>\n${video.chats[video.chats.length - 1].text}\n</Reply>\n`
+      prompt += "Summarize the whole chat including your newest reply in no longer than 1 page."
+    }
+    prompt += "\n\nAssistant:"
+
+    const input = { 
+      body: JSON.stringify({
+        prompt: prompt,
+        max_tokens_to_sample: Math.round(this.maxCharactersForChat/this.estimatedCharactersPerToken),
+        stop_sequences: ["\nUser:", "\nYou:"]
+      }), 
+      modelId: this.modelId, 
+      contentType: "application/json",
+      accept: "application/json"
+    };
+    const response = await this.bedrockClient.send(new InvokeModelCommand(input));
+    video.chatSummary = JSON.parse(new TextDecoder().decode(response.body)).completion
+    this.setState({videos: this.state.videos})
   }
 
   async handleSearchTextChange(event){
@@ -250,7 +437,7 @@ export class VideoTable extends Component {
     // Render the video names as Accordion headers.
     return this.state.videos.map((video, i) => { 
         return (
-          <Accordion.Item eventKey={video.index.toString() + activePage.toString()}>
+          <Accordion.Item key={`video-container-${i}`}  eventKey={video.index.toString() + activePage.toString()}>
             <Accordion.Header onClick={this.videoClicked.bind(this, video)}>{video.name}</Accordion.Header>
             <Accordion.Body>
               <Row>
@@ -284,12 +471,14 @@ export class VideoTable extends Component {
                 <Col className={(video.loaded && typeof video.videoScript !== "undefined" ) ? "" : "d-none"}>
                   <Row><Col><h5 align="left">Ask about the video:</h5></Col></Row>
                     {this.renderChat(video)}
+                    { video.chatWaiting ? <Row><Col><Spinner className="chat-spinner" size="sm" animation="grow" variant="info" role="status"><span className="visually-hidden">Thinking ...</span></Spinner></Col></Row> : "" }
                   <Row><Col>
                     <Form.Control
                       type="text"
                       id={("video-" + video.index + "-chat-input")}
                       placeholder="e.g. How many people are featured in this video?"
                       onKeyDown={this.handleChatInputChange.bind(this, video)}
+                      disabled={ video.chatWaiting ? true : false }
                     />
                     <Form.Text id={("video-" + video.index + "-chat-input")} ></Form.Text>
                   </Col></Row>

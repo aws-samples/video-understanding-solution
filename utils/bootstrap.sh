@@ -1,10 +1,8 @@
 #!/bin/bash
 
-if [ ! -d "venv" ]; then
-    virtualenv -p python3 venv
+if [ -d "venv" ]; then
+    source venv/bin/activate
 fi
-
-source venv/bin/activate
 
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
@@ -27,4 +25,6 @@ echo $region > .DEFAULT_REGION
 
 cdk bootstrap aws://${account}/${region} --context environment=$environment
 
-deactivate
+if [ -d "venv" ]; then
+    deactivate
+fi

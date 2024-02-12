@@ -64,7 +64,7 @@ function App({ signOut, user }: WithAuthenticatorProps) {
   });
 
   return (
-    <div className="App" user={user}>
+    <div className="App" user={user} key="app-root">
       <Navbar expand="lg" className="bg-body-tertiary">
         <Container>
           <Navbar.Brand href="#">Video Understanding Solution</Navbar.Brand>
