@@ -165,15 +165,15 @@ export class VideoTable extends Component {
     return video
   }
 
-  async downloadAndShowVideo(video){
+  async showVideo(video){
     // Generate presigned URL for video
     const getObjectParams = {
       Bucket: this.bucketName,
       Key: this.rawFolder + "/" + video.name
     }
-    command = new GetObjectCommand(getObjectParams);
+    const command = new GetObjectCommand(getObjectParams);
     video.url = await getSignedUrl(this.s3Client, command, { expiresIn: 180 });
-    video.shown = true
+    video.videoShown = true
     this.setState({videos: this.state.videos})
   }
 
@@ -457,39 +457,20 @@ export class VideoTable extends Component {
             <Accordion.Header onClick={this.videoClicked.bind(this, video)}>{video.name}</Accordion.Header>
             <Accordion.Body>
               <Row>
-              <Row><Col>
-                  { !video.videoShown ? <Button variant="info" size="sm" onClick={() => { this.downloadAndShowVideo(this, video);}}>Show video</Button> : "" }
-              </Col></Row>
-                { video.videoShown ? <Col><video width="100%" controls><source src={video.url} type="video/mp4" /></video></Col> : "" }
+                <Col>
+                  { !video.videoShown ? <Button variant="info" size="sm" onClick={this.showVideo.bind(this,video)}>Show video</Button> : <video width="100%" controls><source src={video.url} type="video/mp4" /></video> }
+                </Col>
               </Row>
               <Row>
                 <Col className={video.loaded  ? "" : "d-none"}>
                   <Row><Col><h5 align="left">Summary:</h5></Col></Row>
-                  <Row><Col><p align="left">{typeof video.summary === "undefined" ? "Summary is not ready yet" : video.summary }</p></Col></Row>
+                  <Row><Col><p className="paragraph-with-newlines" align="left">{typeof video.summary === "undefined" ? "Summary is not ready yet" : video.summary }</p></Col></Row>
                 </Col>
               </Row>
               <Row>
                 <Col className={video.loaded  ? "" : "d-none"}>
                   <Row><Col><h5 align="left">Entities:</h5></Col></Row>
-                  <Row><Col><p align="left">{typeof video.entities === "undefined" ? "Entity list is not ready yet" : video.entities }</p></Col></Row>
-                </Col>
-              </Row>
-              <Row>
-                <Col className={video.loaded  ? "" : "d-none"}>
-                  <Row><Col><h5 align="left">Video script:</h5></Col></Row>
-                  <Row><Col>
-                    <p align="left">
-                      <Button variant="info" size="sm"
-                        onClick={() => { video.videoScriptShown = !video.videoScriptShown; this.setState({videos: this.state.videos });}}
-                        aria-expanded={video.videoScriptShown}
-                      >
-                        Show/hide
-                      </Button>
-                    </p>
-                    <Collapse in={video.videoScriptShown}>
-                      <p id={("video-" + video.index + "-script")} className="preserve-line-breaks" align="left">{typeof video.videoScript === "undefined" ? "Video script is not ready yet" : video.videoScript }
-                      </p></Collapse>
-                  </Col></Row>
+                  <Row><Col><p className="paragraph-with-newlines" align="left">{typeof video.entities === "undefined" ? "Entity list is not ready yet" : video.entities }</p></Col></Row>
                 </Col>
               </Row>
               <Row>

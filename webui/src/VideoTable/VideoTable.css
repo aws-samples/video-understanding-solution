@@ -4,3 +4,6 @@
 .chat-spinner{
     margin-bottom: 5px;
 }
+.paragraph-with-newlines{
+    white-space: pre-line
+}

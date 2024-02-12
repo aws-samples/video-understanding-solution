@@ -386,7 +386,7 @@ class VideoAnalyzer(ABC):
 
         return self.video_rolling_summary
     
-    def extract_sentiment():
+    def extract_sentiment(self):
         prompt_prefix = "You are an expert video analyst who reads a VIDEO SCRIPT and extract entities and their associated sentiment from the video.\n" \
                         "The VIDEO SCRIPT contains the visual scenes, the visual texts, and human voice in the video."
         
@@ -405,6 +405,7 @@ class VideoAnalyzer(ABC):
             "Now your job is to list the entities you found in the video and their sentiment [positive, negative, mixed, neutral]. For example, your answer should follow the below format:\n" \
             "Mathematic=negative\nMy teacher=positive\nPlaying in the classroom=positive\nExamination=mixed\n" \
             "DO NOT make up anything you do not know. DO NOT mention about \"video script\" or as your audience might not be aware of its presence.\n" \
+            "Answer directly with the list of entities without any intro." \
             "Entities: "
           
             self.video_rolling_sentiment = self.call_llm(prompt)
@@ -443,6 +444,7 @@ class VideoAnalyzer(ABC):
                     "DO NOT make up anything you do not know. DO NOT mention about \"video script\" as your audience might not be aware of its presence.\n" \
                     "You can combine the information from previous entities and sentiment you extracted, your previous rationales, and the current VIDEO SCRIPT to come up with final entities and sentiment.\n" \
                     "DO NOT list the same entity twice. Instead, you can modify your previous extracted entities and sentiment to combine the findings.\n" \
+                    "Answer directly with the list of entities without any intro." \
                     "Entities: "
                     
                     chunk_sentiment = self.call_llm(prompt)
