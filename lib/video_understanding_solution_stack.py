@@ -26,7 +26,7 @@ from cdk_nag import AwsSolutionsChecks, NagSuppressions
 model_id = "anthropic.claude-instant-v1"
 visual_scene_detection_confidence_threshold = 98.0
 visual_text_detection_confidence_threshold = 98.0
-raw_folder = "raw"
+raw_folder = "source"
 summary_folder = "summary"
 video_script_folder = "video_script"
 transcription_root_folder = "audio_transcript"
@@ -76,10 +76,10 @@ class VideoUnderstandingSolutionStack(Stack):
             { "id": 'AwsSolutions-IAM5', "reason": 'Allow using * in the policy for bucket notification as this is managed by CDK. '}
         ], True)
 
-        # EventBridge - Rule
-        new_video_uploaded_rule = _events.Rule(
+        # EventBridge - Rule mp4
+        new_mp4_video_uploaded_rule = _events.Rule(
             self,
-            "New video uploaded rule",
+            "New mp4 video uploaded rule",
             event_pattern=_events.EventPattern(
                 source=["aws.s3"],
                 detail_type=["Object Created"],
@@ -89,18 +89,35 @@ class VideoUnderstandingSolutionStack(Stack):
                     },
                     "object": {
                         "key": [{ "wildcard": f"{raw_folder}/*.mp4"}]
-                                                    # _events.Match.prefix(f"{raw_folder}/")
-                                                    #_events.Match.all_of(_events.Match.prefix("raw/")) #,
-                                                    #_events.Match.any_of(_events.Match.suffix(".mp4"),
-                                                    #                     _events.Match.suffix(".MP4"),
-                                                    #                     _events.Match.suffix(".mov"),
-                                                    #                     _events.Match.suffix(".MOV")))
+                    },
+                },
+            ),
+        )
+        # EventBridge - Rule MP4
+        new_MP4_video_uploaded_rule = _events.Rule(
+            self,
+            "New MP4 video uploaded rule",
+            event_pattern=_events.EventPattern(
+                source=["aws.s3"],
+                detail_type=["Object Created"],
+                detail={
+                    "bucket": {
+                        "name": _events.Match.exact_string(video_bucket_s3.bucket_name)
+                    },
+                    "object": {
+                        "key": [{ "wildcard": f"{raw_folder}/*.MP4"}]
                     },
                 },
             ),
         )
         # Suppress cdk_nag rule to allow for using AWSLambdaBasicExecutionRole managed role/policy and for using <arn>* in the IAM policy since video file names can vary
-        NagSuppressions.add_resource_suppressions(new_video_uploaded_rule, [
+        NagSuppressions.add_resource_suppressions(new_mp4_video_uploaded_rule, [
+            { "id": 'AwsSolutions-IAM4', "reason": 'Allow using AWSLambdaBasicExecutionRole managed role/policy'},
+            { "id": 'AwsSolutions-IAM5', "reason": 'Allow using <arn>* in the policy since video file names can vary'}
+        ], True)
+
+        # Suppress cdk_nag rule to allow for using AWSLambdaBasicExecutionRole managed role/policy and for using <arn>* in the IAM policy since video file names can vary
+        NagSuppressions.add_resource_suppressions(new_MP4_video_uploaded_rule, [
             { "id": 'AwsSolutions-IAM4', "reason": 'Allow using AWSLambdaBasicExecutionRole managed role/policy'},
             { "id": 'AwsSolutions-IAM5', "reason": 'Allow using <arn>* in the policy since video file names can vary'}
         ], True)
@@ -324,7 +341,8 @@ class VideoUnderstandingSolutionStack(Stack):
                             actions=["s3:PutObject"],
                             resources=[
                                 video_bucket_s3.arn_for_objects(f"{summary_folder}/*"),
-                                video_bucket_s3.arn_for_objects(f"{video_script_folder}/*")
+                                video_bucket_s3.arn_for_objects(f"{video_script_folder}/*"),
+                                video_bucket_s3.arn_for_objects(f"{entity_sentiment_folder}/*")
                             ],
                             effect=_iam.Effect.ALLOW,
                         ),
@@ -421,8 +439,20 @@ class VideoUnderstandingSolutionStack(Stack):
             },
         )
         
-        # Add target for EventBridge to trigger Step Function
-        new_video_uploaded_rule.add_target(
+        # Add target for EventBridge to trigger Step Function for mp4 videos
+        new_mp4_video_uploaded_rule.add_target(
+          _events_targets.SfnStateMachine(video_analysis_sfn,
+            input= _events.RuleTargetInput.from_object({
+              'detailType': _events.EventField.detail_type,
+              'eventId': _events.EventField.from_path('$.id'),
+              'videoS3Path': _events.EventField.from_path('$.detail.object.key'),
+              'videoS3BucketName': _events.EventField.from_path('$.detail.bucket.name')
+            }),
+            role=event_bridge_role)
+        )
+
+        # Add target for EventBridge to trigger Step Function for MP4 videos
+        new_MP4_video_uploaded_rule.add_target(
           _events_targets.SfnStateMachine(video_analysis_sfn,
             input= _events.RuleTargetInput.from_object({
               'detailType': _events.EventField.detail_type,
@@ -509,7 +539,8 @@ class VideoUnderstandingSolutionStack(Stack):
                                 f"arn:aws:s3:::{video_bucket_s3.bucket_name}", 
                                 f"arn:aws:s3:::{video_bucket_s3.bucket_name}/{raw_folder}/*",
                                 f"arn:aws:s3:::{video_bucket_s3.bucket_name}/{video_script_folder}/*",
-                                f"arn:aws:s3:::{video_bucket_s3.bucket_name}/{summary_folder}/*"
+                                f"arn:aws:s3:::{video_bucket_s3.bucket_name}/{summary_folder}/*",
+                                f"arn:aws:s3:::{video_bucket_s3.bucket_name}/{entity_sentiment_folder}/*"
                             ]
                         ),
                         _iam.PolicyStatement(
@@ -559,7 +590,7 @@ class VideoUnderstandingSolutionStack(Stack):
             { "id": 'AwsSolutions-IAM5', "reason": 'The <arn>* is needed in the IAM policy to allow variety of file names in S3 bucket.'}
         ], True)
 
-        ui_amplify_app = _amplify.App(self, "UiAmplifyApp", 
+        ui_amplify_app = _amplify.App(self, "VideoUnderstandingSolutionUIApp", 
             source_code_provider=_amplify.CodeCommitSourceCodeProvider(
                 repository=repo,
             ),

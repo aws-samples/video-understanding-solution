@@ -3,6 +3,7 @@ import { PutObjectCommand } from "@aws-sdk/client-s3";
 
 import Form from "react-bootstrap/Form";
 import Row from "react-bootstrap/Row";
+import Col from "react-bootstrap/Col";
 import Button from "react-bootstrap/Button";
 
 export class VideoUpload extends Component {
@@ -52,14 +53,19 @@ export class VideoUpload extends Component {
     return (
       <>
         <Row>
-          <Form.Group controlId="formFile" className="mb-3">
-            <Form.Label>Video Upload</Form.Label>
-            <Form.Control
-              type="file"
-              accept="video/mp4"
-              onChange={this.onFileChange}
-            />
-          </Form.Group>
+          <Col xs={6}>
+            <Form.Group controlId="formFile" className="mb-3">
+              <p align="left"><Form.Label>Video Upload</Form.Label></p>
+              <Form.Control
+                type="file"
+                accept="video/mp4"
+                onChange={this.onFileChange}
+              />
+            </Form.Group>
+          </Col>
+          <Col xs={6}>
+            <p align="left">You can also upload the videos straight to Amazon S3 bucket {this.bucketName} inside folder {this.rawFolder}.</p>
+          </Col>
         </Row>
         <Row>
           <Button

@@ -79,8 +79,9 @@ export class VideoTable extends Component {
         name: name,
         loaded: false,
         summary: undefined,
+        entities: undefined,
         videoScript: undefined,
-        videoScriptShown: false,
+        videoShown: false,
         chats: [],
         chatSummary: "",
         chatLength: 0,
@@ -138,13 +139,16 @@ export class VideoTable extends Component {
       video.summary = await response.Body.transformToString();
     } catch (err) {}
 
-    // Generate presigned URL for video
-    const getObjectParams = {
+    // Try to find the entities and sentiment
+    var command = new GetObjectCommand({
       Bucket: this.bucketName,
-      Key: this.rawFolder + "/" + name
-    }
-    command = new GetObjectCommand(getObjectParams);
-    video.url = await getSignedUrl(this.s3Client, command, { expiresIn: 180 });
+      Key: this.entitySentimentFolder + "/" + name + ".txt",
+    });
+    try {
+      const response = await this.s3Client.send(command);
+      video.entities = await response.Body.transformToString();
+    } catch (err) {}
+
 
     // Try to get the video script
     var command = new GetObjectCommand({
@@ -159,6 +163,18 @@ export class VideoTable extends Component {
     video.loaded = true
 
     return video
+  }
+
+  async downloadAndShowVideo(video){
+    // Generate presigned URL for video
+    const getObjectParams = {
+      Bucket: this.bucketName,
+      Key: this.rawFolder + "/" + video.name
+    }
+    command = new GetObjectCommand(getObjectParams);
+    video.url = await getSignedUrl(this.s3Client, command, { expiresIn: 180 });
+    video.shown = true
+    this.setState({videos: this.state.videos})
   }
 
   async videoClicked(video) {
@@ -441,12 +457,21 @@ export class VideoTable extends Component {
             <Accordion.Header onClick={this.videoClicked.bind(this, video)}>{video.name}</Accordion.Header>
             <Accordion.Body>
               <Row>
-                { video.loaded  ? <Col><video width="100%" controls><source src={video.url} type="video/mp4" /></video></Col> : "" }
+              <Row><Col>
+                  { !video.videoShown ? <Button variant="info" size="sm" onClick={() => { this.downloadAndShowVideo(this, video);}}>Show video</Button> : "" }
+              </Col></Row>
+                { video.videoShown ? <Col><video width="100%" controls><source src={video.url} type="video/mp4" /></video></Col> : "" }
               </Row>
               <Row>
                 <Col className={video.loaded  ? "" : "d-none"}>
                   <Row><Col><h5 align="left">Summary:</h5></Col></Row>
                   <Row><Col><p align="left">{typeof video.summary === "undefined" ? "Summary is not ready yet" : video.summary }</p></Col></Row>
+                </Col>
+              </Row>
+              <Row>
+                <Col className={video.loaded  ? "" : "d-none"}>
+                  <Row><Col><h5 align="left">Entities:</h5></Col></Row>
+                  <Row><Col><p align="left">{typeof video.entities === "undefined" ? "Entity list is not ready yet" : video.entities }</p></Col></Row>
                 </Col>
               </Row>
               <Row>
