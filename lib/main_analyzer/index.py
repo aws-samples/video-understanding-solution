@@ -56,12 +56,12 @@ def handler(event, context):
 
     return {
         'statusCode': 200,
-        'headers': {
-            'Access-Control-Allow-Headers': '*',
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
-        },
-        'body': json.dumps(response)
+        #'headers': {
+        #    'Access-Control-Allow-Headers': '*',
+        #    'Access-Control-Allow-Origin': '*',
+        #    'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
+        #},
+        'body': "Analysis is successful"
     }
 
 def store_summary_result(summary, video_name):
@@ -200,7 +200,6 @@ class VideoAnalyzer(ABC):
         self.text_similarity_score = 0.5
         self.video_rolling_summary = ""
         self.video_rolling_sentiment = ""
-        self.video_rolling_sentiment_rationale = ""
         self.combined_video_script = ""
         self.all_combined_video_script = ""
         self.llm_parameters = {}
@@ -325,17 +324,19 @@ class VideoAnalyzer(ABC):
           
             prompt = f"{prompt_prefix}\n\n" \
             f"{core_prompt}\n\n" \
-            "Given the VIDEO SCRIPT above, decribe the summary of the video and why it is interesting. DO NOT make up anything you do not know. DO NOT mention about \"video script\" or as your audience might not be aware of its presence.\n" \
+            "Given the VIDEO SCRIPT above, decribe the summary of the video and why it is interesting. DO NOT make up anything you do not know. DO NOT mention about \"video script\" as your audience might not be aware of its presence.\n" \
+            "Give the summary directly without any intro.\n" \
             "Summary: "
           
             self.video_rolling_summary = self.call_llm(prompt)
         # When the video is long enough to be divided into multiple chunks to fit within LLM's context length
         else:
             number_of_chunks = math.ceil( (video_script_length + 1) / (self.video_script_chunk_size - self.video_script_chunk_overlap) )
-            
+
             for chunk_number in range(0, number_of_chunks):
                 is_last_chunk = (chunk_number == (number_of_chunks - 1))
                 is_first_chunk = (chunk_number == 0)
+
                 start = 0 if is_first_chunk else int(chunk_number*self.video_script_chunk_size - self.video_script_chunk_overlap)
                 stop = video_script_length if is_last_chunk else (chunk_number+1)*self.video_script_chunk_size
                 chunk_combined_video_script = self.combined_video_script[start:stop]
@@ -357,7 +358,8 @@ class VideoAnalyzer(ABC):
                     f"{self.video_rolling_summary}\n\n" \
                     f"The below VIDEO SCRIPT is only for the LAST video part.\n\n" \
                     f"{core_prompt}\n\n" \
-                    "Given the previous summary and the VIDEO SCRIPT above, decribe the summary of the whole video and why it is interesting. DO NOT make up anything you do not know. DO NOT mention about \"video script\" or as your audience might not be aware of its presence.\n" \
+                    "Given the previous summary and the VIDEO SCRIPT above, decribe the summary of the whole video and why it is interesting. DO NOT make up anything you do not know. DO NOT mention about \"video script\" as your audience might not be aware of its presence.\n" \
+                    "Give the summary directly without any intro.\n" \
                     "Summary: "
                     
                     chunk_summary = self.call_llm(prompt)
@@ -402,11 +404,14 @@ class VideoAnalyzer(ABC):
           
             prompt = f"{prompt_prefix}\n\n" \
             f"{core_prompt}\n\n" \
-            "Now your job is to list the entities you found in the video and their sentiment [positive, negative, mixed, neutral]. For example, your answer should follow the below format:\n" \
-            "Mathematic=negative\nMy teacher=positive\nPlaying in the classroom=positive\nExamination=mixed\n" \
-            "DO NOT make up anything you do not know. DO NOT mention about \"video script\" or as your audience might not be aware of its presence.\n" \
-            "Answer directly with the list of entities without any intro." \
-            "Entities: "
+            "Now your job is to list the entities you found in the video and their sentiment [positive, negative, mixed, neutral].\n" \
+            "Your answer MUST consist ONLY pairs of entity and sentiment with : as delimiter. Follow the below format.\n\n" \
+            "Entities:\n" \
+            "mathematic:negative\nteacher:positive\nplaying in classroom:positive\nexamination:mixed\n\n" \
+            "DO NOT make up anything you do not know. DO NOT mention about \"video script\" as your audience might not be aware of its presence.\n" \
+            "STRICTLY FOLLOW the format above.\n" \
+            "Give the entities and sentiment directly without any intro.\n" \
+            "Entities:\n"
           
             self.video_rolling_sentiment = self.call_llm(prompt)
         else:
@@ -432,20 +437,22 @@ class VideoAnalyzer(ABC):
                 if is_last_chunk:
                     prompt = f"{prompt_prefix}\n\n" \
                     f"The video has {number_of_chunks} parts.\n\n" \
-                    "Below are the entities and sentiment you extracted from the previous parts of the video:\n\n" \
-                    f"<Entities>\n{self.video_rolling_sentiment}\n</Entities>\n\n" \
-                    "Below are the rationales you had for previous sentiment extracted above:\n\n" \
-                    f"<Rationale>\n{self.video_rolling_sentiment_rationale}\n</Rationale>\n\n" \
+                    "Below are the entities and sentiment you extracted from the previous parts of the video, with reasoning.\n\n" \
+                    f"Entities:\n{self.video_rolling_sentiment}\n\n" \
                     f"The below VIDEO SCRIPT is only for the LAST video part.\n\n" \
                     f"{core_prompt}\n\n" \
-                    "Now your job is to provide the final list of entities you found in the whole video and their sentiment [positive, negative, mixed, neutral]. For example, your answer should follow the below format.\n" \
-                    "Entities:\n"
-                    "Mathematic=negative\nMy teacher=positive\nPlaying in the classroom=positive\nExamination=mixed\n" \
+                    "Now your job is to list the entities you found in the video and their sentiment [positive, negative, mixed, neutral]. Also provide the reasoning.\n" \
+                    "Your answer MUST consist ONLY pairs of entity and sentiment with : as delimiter. NO reasoning. Follow the below format.\n\n" \
+                    "Entities:\n" \
+                    "mathematic:negative\n" \
+                    "teacher:positive\n" \
+                    "playing in classroom:positive\n" \
+                    "examination:mixed\n\n" \
                     "DO NOT make up anything you do not know. DO NOT mention about \"video script\" as your audience might not be aware of its presence.\n" \
-                    "You can combine the information from previous entities and sentiment you extracted, your previous rationales, and the current VIDEO SCRIPT to come up with final entities and sentiment.\n" \
                     "DO NOT list the same entity twice. Instead, you can modify your previous extracted entities and sentiment to combine the findings.\n" \
-                    "Answer directly with the list of entities without any intro." \
-                    "Entities: "
+                    "STRICTLY FOLLOW the format above. DELETE any reasoning of the sentiment. DELETE unnecessary information. \n" \
+                    "Give the entities and sentiment directly without any intro.\n" \
+                    "Entities:\n"
                     
                     chunk_sentiment = self.call_llm(prompt)
                     self.video_rolling_sentiment = chunk_sentiment
@@ -453,46 +460,40 @@ class VideoAnalyzer(ABC):
                     prompt = f"{prompt_prefix}\n\n" \
                     f"The video has {number_of_chunks} parts. The below VIDEO SCRIPT is only for the first part.\n\n" \
                     f"{core_prompt}\n\n" \
-                    "Now your job is to provide the list of entities you found in the this part of the video and their sentiment [positive, negative, mixed, neutral]. Also mention your rationale. For example, your answer should follow the below format.\n" \
-                    "Entities:\n"
-                    "Mathematic=negative\nMy teacher=positive\nPlaying in the classroom=positive\nExamination=mixed\n" \
-                    "\n\nRationale:\n" \
-                    "The kid being interviewed said he dreads math.\nThe kid really respects his teacher as the teacher is patient to him.\nThe kid also likes to play in the classroom, the only thing motivates him to go to school.\nHe dreads examination for fear of bad result, but he enjoys the challenge.\n\n" \
-                    "DO NOT make up anything you do not know. DO NOT mention about \"video script\" as your audience might not be aware of its presence.\n" \
+                    "Now your job is to list the entities you found in the video and their sentiment [positive, negative, mixed, neutral]. Also provide the reasoning.\n" \
+                    "Your answer MUST consist ONLY pairs of entity and sentiment with : as delimiter, and the reasoning after - sign. Follow the below format.\n\n" \
+                    "Entities:\n" \
+                    "mathematic:negative - The kid being interviewed said he dreads math.\n" \
+                    "teacher:positive - The kid really respects his teacher as the teacher is patient to him.\n" \
+                    "playing in classroom:positive - The kid also likes to play in the classroom, the only thing motivates him to go to school.\n" \
+                    "examination:mixed - The kid dreads examination for fear of bad result, but he enjoys the challenge.\n\n" \
+                    "DO NOT make up anything you do not know.\n" \
                     "DO NOT list the same entity twice. Instead, you can modify your previous extracted entities and sentiment to combine the findings.\n" \
-                    "Entities: "
+                    "STRICTLY FOLLOW the format above.\n" \
+                    "Entities:\n"
                     
                     chunk_sentiment = self.call_llm(prompt)
-                    if "\n\nRationale:" in chunk_sentiment:
-                        delimiter_index = chunk_sentiment.index("\n\nRationale:")
-                        chunk_sentiment = chunk_sentiment[:delimiter_index]
-                        chunk_rationale = chunk_sentiment[delimiter_index:]
-                        self.video_rolling_rationale = chunk_rationale
                     self.video_rolling_sentiment = chunk_sentiment
                 else:
                     prompt = f"{prompt_prefix}\n\n" \
                     f"The video has {number_of_chunks} parts.\n\n" \
-                    "Below are the entities and sentiment you extracted from the previous parts of the video:\n\n" \
-                    f"<Entities>\n{self.video_rolling_sentiment}\n</Entities>\n\n" \
-                    "Below are the rationales you had for previous sentiment extracted above:\n\n" \
-                    f"<Rationale>\n{self.video_rolling_sentiment_rationale}\n</Rationale>\n\n" \
+                    "Below are the entities and sentiment you extracted from the previous parts of the video, with reasoning.\n\n" \
+                    f"Entities:\n{self.video_rolling_sentiment}\n\n" \
                     f"The below VIDEO SCRIPT is only for part {chunk_number} of the video.\n\n" \
                     f"{core_prompt}\n\n" \
-                    "Now your job is to provide the list of entities you found in the this part of the video and their sentiment [positive, negative, mixed, neutral]. Also mention your rationale. For example, your answer should follow the below format.\n" \
-                    "Entities:\n"
-                    "Mathematic=negative\nMy teacher=positive\nPlaying in the classroom=positive\nExamination=mixed\n" \
-                    "\n\nRationale:\n" \
-                    "The kid being interviewed said he dreads math.\nThe kid really respects his teacher as the teacher is patient to him.\nThe kid also likes to play in the classroom, the only thing motivates him to go to school.\nHe dreads examination for fear of bad result, but he enjoys the challenge.\n\n" \
-                    "DO NOT make up anything you do not know. DO NOT mention about \"video script\" as your audience might not be aware of its presence.\n" \
+                    "Now your job is to list the entities you found in the whole video so far and their sentiment [positive, negative, mixed, neutral]. Also provide the reasoning.\n" \
+                    "Your answer MUST consist ONLY pairs of entity and sentiment with : as delimiter, and the reasoning after - sign. Follow the below format.\n\n" \
+                    "Entities:\n" \
+                    "mathematic:negative - The kid being interviewed said he dreads math.\n" \
+                    "teacher:positive - The kid really respects his teacher as the teacher is patient to him.\n" \
+                    "playing in classroom:positive - The kid also likes to play in the classroom, the only thing motivates him to go to school.\n" \
+                    "examination:mixed - The kid dreads examination for fear of bad result, but he enjoys the challenge.\n\n" \
+                    "DO NOT make up anything you do not know.\n" \
                     "DO NOT list the same entity twice. Instead, you can modify your previous extracted entities and sentiment to combine the findings.\n" \
-                    "Entities: "
+                    "STRICTLY FOLLOW the format above.\n" \
+                    "Entities:\n"
                     
                     chunk_sentiment = self.call_llm(prompt)
-                    if "\n\nRationale:" in chunk_sentiment:
-                        delimiter_index = chunk_sentiment.index("\n\nRationale:")
-                        chunk_sentiment = chunk_sentiment[:delimiter_index]
-                        chunk_rationale = chunk_sentiment[delimiter_index:]
-                        self.video_rolling_rationale = chunk_rationale
                     self.video_rolling_sentiment = chunk_sentiment
                 
         return self.video_rolling_sentiment
@@ -524,10 +525,18 @@ class VideoAnalyzerBedrock(VideoAnalyzer):
         "stop_sequences": ["\n\nHuman:"]
     }
   
-    def call_llm(self, prompt):
+    def call_llm(self, prompt, temperature=None, top_k=None, stop_sequences=[]):
         print("Prompt to LLM")
-        print(prompt)
+        print(prompt.replace("\n",""))
+
         self.llm_parameters['prompt'] = f"\n\nHuman:{prompt}\n\nAssistant:"
+        if temperature is not None:
+            self.llm_parameters['temperature'] = temperature
+        if top_k is not None:
+            self.llm_parameters['top_k'] = top_k
+        if stop_sequences is not None:
+            self.llm_parameters['stop_sequences'] += stop_sequences
+
         input_str = json.dumps(self.llm_parameters)
         encoded_input = input_str.encode("utf-8")
         call_done = False

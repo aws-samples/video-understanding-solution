@@ -5,6 +5,8 @@ from aws_cdk import (
     CfnOutput,
     aws_iam as _iam,
     aws_s3 as _s3,
+    aws_ec2 as _ec2,
+    aws_rds as _rds,
     aws_events as _events,
     aws_events_targets as _events_targets,
     aws_lambda as _lambda,
@@ -14,6 +16,7 @@ from aws_cdk import (
     aws_codecommit as _codecommit,
     aws_amplify_alpha as _amplify,
     aws_cognito as _cognito,
+    aws_secretsmanager as _secretsmanager,
     custom_resources as _custom_resources,
     Duration, CfnOutput, BundlingOptions, RemovalPolicy, CustomResource, Aspects
 )
@@ -32,6 +35,10 @@ video_script_folder = "video_script"
 transcription_root_folder = "audio_transcript"
 transcription_folder = f"{transcription_root_folder}/{raw_folder}"
 entity_sentiment_folder = "sentiment"
+database_name = "videos"
+video_table_name = "videos"
+entities_table_name = "entities"
+embedding_dimension = 1536
 
 class VideoUnderstandingSolutionStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
@@ -43,9 +50,35 @@ class VideoUnderstandingSolutionStack(Stack):
 
         Aspects.of(self).add(AwsSolutionsChecks(verbose=True))
 
-        ##
-        ## Video Analysis
-        ##
+        # VPC
+        vpc = _ec2.Vpc(self, f"Vpc",
+          ip_addresses         = _ec2.IpAddresses.cidr("10.120.0.0/16"),
+          max_azs              = 3,
+          enable_dns_support   = True,
+          enable_dns_hostnames = True,
+          nat_gateways=1,
+          vpc_name=f"{construct_id}-VPC",
+          subnet_configuration = [
+            _ec2.SubnetConfiguration(
+              cidr_mask   = 24,
+              name        = 'public',
+              subnet_type = _ec2.SubnetType.PUBLIC,
+            ),
+            _ec2.SubnetConfiguration(
+              cidr_mask   = 24,
+              name        = 'private_with_egress',
+              subnet_type = _ec2.SubnetType.PRIVATE_WITH_EGRESS,
+            ),
+            _ec2.SubnetConfiguration(
+              cidr_mask   = 24,
+              name        = 'private',
+              subnet_type = _ec2.SubnetType.PRIVATE_ISOLATED,
+            )
+          ]
+        )
+        vpc.add_flow_log("FlowLogS3")
+        private_subnets =  _ec2.SubnetSelection(subnet_type=_ec2.SubnetType.PRIVATE_ISOLATED)
+        private_with_egress_subnets = _ec2.SubnetSelection(subnet_type=_ec2.SubnetType.PRIVATE_WITH_EGRESS)
 
         # S3 - Video bucket
         video_bucket_s3 = _s3.Bucket(
@@ -731,11 +764,163 @@ class VideoUnderstandingSolutionStack(Stack):
             { "id": 'AwsSolutions-L1', "reason": 'As this is managed by CDK, allowing using the non-latest Lambda runtime.'}
         ], True)
 
+        # Subnet group
+        db_subnet_group = _rds.SubnetGroup(self, f"DBSubnetGroup",
+           vpc = vpc,
+           description = "Aurora subnet group",
+           vpc_subnets = private_subnets,
+           subnet_group_name= "Aurora subnet group"
+        )
+
+        # Creating security group to be used by Lambda function that rotates DB secret
+        secret_rotation_security_group = _ec2.SecurityGroup(self, 'RotateDBSecurityGroup',
+            security_group_name = f"{construct_id}-vectorDB-secret-rotator",
+            vpc = vpc,
+            allow_all_outbound = True,
+            description = "Security group for Lambda function that rotates DB secret",
+        )
+
+        # Creating the database security group
+        db_security_group = _ec2.SecurityGroup(self, "VectorDBSecurityGroup",
+            security_group_name = f"{construct_id}-vectorDB",
+            vpc = vpc,
+            allow_all_outbound = True,
+            description = "Security group for Aurora Serverless PostgreSQL",
+        )
+
+        db_security_group.add_ingress_rule(
+            peer =db_security_group,
+            connection =_ec2.Port(protocol=ec2.Protocol("ALL"), string_representation="ALL"),
+            description="Any in connection from self"
+        )
+        
+        db_security_group.add_ingress_rule(
+            peer =_ec2.Peer.ipv4(vpc.vpc_cidr_block),
+            connection =_ec2.Port(protocol=_ec2.Protocol("TCP"), from_port=5432, to_port=5432, string_representation="tcp5432 PostgreSQL"),
+            description="Postgresql port in from within the VPC"
+        )
+
+        db_security_group.add_ingress_rule(
+          peer= _ec2.Peer.security_group_id(secret_rotation_security_group.security_group_id),
+          connection=_ec2.Port.tcp(5432),
+          description="Allow DB access from Lambda Functions that rotate Secrets"
+        )
+
+        # Create secret for use with Aurora Serverless
+        aurora_cluster_username="clusteradmin"
+        aurora_cluster_secret = _secretsmanager.Secret(self, "AuroraClusterCredentials",
+          secret_name = f"{construct_id}-vectorDB-creds",
+          description = "Aurora Cluster Credentials",
+          generate_secret_string=_secretsmanager.SecretStringGenerator(
+            exclude_characters ="\"@/\\ '",
+            generate_string_key ="password",
+            password_length =30,
+            secret_string_template=json.dumps(
+              {
+                "username": aurora_cluster_username,
+                "engine": "postgres"
+              })),
+        )
+        aurora_cluster_secret.add_rotation_schedule(
+          id="1",
+          automatically_after=Duration.days(30),
+          hosted_rotation=_secretsmanager.HostedRotation.postgre_sql_single_user(
+            security_groups=[secret_rotation_security_group],
+            vpc=vpc,
+            vpc_subnets=private_with_egress_subnets
+          )
+        )
+        self.db_secret_arn = aurora_cluster_secret.secret_full_arn
+        self.db_secret_name = aurora_cluster_secret.secret_name
+        aurora_cluster_credentials = _rds.Credentials.from_secret(aurora_cluster_secret, aurora_cluster_username)
+        
+        # Provisioning the Aurora Serverless database
+        aurora_cluster = _rds.DatabaseCluster(self, f"{construct_id}AuroraDatabase",
+          credentials= aurora_cluster_credentials,
+          iam_authentication=True,
+          engine= _rds.DatabaseClusterEngine.aurora_postgres(version=_rds.AuroraPostgresEngineVersion.VER_15_5),
+          writer=_rds.ClusterInstance.serverless_v2("writer"),
+          readers=[
+            _rds.ClusterInstance.serverless_v2("reader1",  scale_with_writer=True),
+          ],
+          serverless_v2_min_capacity=0.5,
+          serverless_v2_max_capacity=1,
+          default_database_name=database_name,
+          security_groups=[db_security_group],
+          vpc=vpc,
+          subnet_group=db_subnet_group,
+          storage_encrypted=True,
+          deletion_protection=True,
+        )
+        
+        self.db_writer_endpoint = aurora_cluster.cluster_endpoint
+        self.db_reader_endpoint = aurora_cluster.cluster_read_endpoint
+        
+        # Lambda for setting up database
+        db_setup_event_handler = _lambda.Function(self, "DatabaseSetupHandler",
+            function_name=f"{construct_id}-DatabaseSetupHandler",
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            timeout=Duration.minutes(1),
+            code=_lambda.Code.from_asset('./lib/db_setup_lambda',
+                bundling= BundlingOptions(
+                  image= _lambda.Runtime.PYTHON_3_12.bundling_image,
+                  command= [
+                    'bash',
+                    '-c',
+                    'pip install -r requirements.txt -t /asset-output && cp -au . /asset-output',
+                  ],
+                )
+            ),
+            environment = {
+                'DB_WRITER_ENDPOINT': self.db_writer_endpoint.hostname,
+                'DATABASE_NAME': database_name,
+                'VIDEO_TABLE_NAME': video_table_name,
+                'ENTITIES_TABLE_NAME': entities_table_name,
+                'CONTENT_TABLE_NAME': content_table_name,
+                'SECRET_NAME': self.db_secret_name,
+                "EMBEDDING_DIMENSION": str(embedding_dimension)
+            },
+            vpc=vpc,
+            vpc_subnets=private_with_egress_subnets,
+            handler='index.on_event'
+        )
+
+        # Suppress CDK nag rule to allow the use of AWS managed policies/roles AWSLambdaVPCAccessExecutionRole and AWSLambdaBasicExecutionRole
+        NagSuppressions.add_resource_suppressions(db_setup_event_handler, [
+            { "id": 'AwsSolutions-IAM4', "reason": 'Allow the use of AWS managed policies/roles AWSLambdaVPCAccessExecutionRole and AWSLambdaBasicExecutionRole'},
+        ], True)
+        
+        # IAM Policy statement for the Lambda function that configures the database
+        statement = iam.PolicyStatement()
+        statement.add_actions("secretsmanager:GetSecretValue")
+        statement.add_resources(aurora_cluster_secret.secret_full_arn)
+        db_setup_event_handler.add_to_role_policy(statement)
+ 
+ 
+        provider = Provider(self, f'{construct_id}DatabaseSetupProvider', 
+                    on_event_handler=db_setup_event_handler)
+
+        
+        # Suppress cdk_nag rule for using not the latest runtime for non container Lambda, as this is managed by CDK Provider.
+        # Also suppress it for using * in IAM policy and for using managed policy, as this is managed by CDK Provider.
+        NagSuppressions.add_resource_suppressions(provider, [
+            { "id": 'AwsSolutions-L1', "reason": "The Lambda function's runtime is managed by CDK Provider. Solution is to update CDK version."},
+            { "id": 'AwsSolutions-IAM4', "reason": 'The Lambda function is managed by Provider'},
+            { "id": 'AwsSolutions-IAM5', "reason": 'The Lambda function is managed by Provider.'}
+        ], True)
+
+
+        db_setup_custom_resource = CustomResource(
+            scope=self,
+            id='DatabaseSetup',
+            service_token=provider.service_token,
+            removal_policy=RemovalPolicy.DESTROY,
+            resource_type="Custom::DatabaseSetupCustomResource"
+        )
+
+        db_setup_custom_resource.node.add_dependency(aurora_cluster) 
 
         CfnOutput(self, "bucket_name", value=video_bucket_s3.bucket_name)
         CfnOutput(self, "web_portal_url", value=f"https://{branch_name}.{ui_amplify_app.default_domain}")
         
-        # Permission
 
-        # video_bucket_s3.grant_read(start_rekognition_label_detection_sfn_task)
-        # video_bucket_s3.grant_read(start_rekognition_text_detection_sfn_task)
