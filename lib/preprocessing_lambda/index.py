@@ -2,7 +2,7 @@ import json, os
 import boto3
 from sqlalchemy import create_engine, Column, Text, DateTime, String, func
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import Session, mapped_column
+from sqlalchemy.orm import mapped_column, sessionmaker
 from sqlalchemy.dialects.postgresql import insert as db_insert
 from pgvector.sqlalchemy import Vector
 

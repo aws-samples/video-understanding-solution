@@ -13,4 +13,6 @@ export default {
     "transcription_folder": "PLACEHOLDER_TRANSCRIPTION_FOLDER",
     "entity_sentiment_folder": "PLACEHOLDER_ENTITY_SENTIMENT_FOLDER",
     "summary_folder": "PLACEHOLDER_SUMMARY_FOLDER",
+    "rest_api_url": "PLACEHOLDER_REST_API_URL",
+    "videos_api_resource": "PLACEHOLDER_VIDEOS_API_RESOURCE"
 }

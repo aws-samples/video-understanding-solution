@@ -100,6 +100,8 @@ function App({ signOut, user }: WithAuthenticatorProps) {
                   videoScriptFolder={awsExports.video_script_folder}
                   entitySentimentFolder={awsExports.entity_sentiment_folder}
                   transcriptionFolder={awsExports.transcription_folder}
+                  restApiUrl={awsExports.rest_api_url}
+                  videosApiResource={awsExports.videos_api_resource}
                 ></VideoTable>
               </Col>
             </Row>

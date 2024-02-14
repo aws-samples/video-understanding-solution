@@ -19,6 +19,8 @@ frontend:
         - sed -i "s/PLACEHOLDER_TRANSCRIPTION_FOLDER/$TRANSCRIPTION_FOLDER/g" ./src/aws-exports.js
         - sed -i "s/PLACEHOLDER_ENTITY_SENTIMENT_FOLDER/$ENTITY_SENTIMENT_FOLDER/g" ./src/aws-exports.js
         - sed -i "s/PLACEHOLDER_SUMMARY_FOLDER/$SUMMARY_FOLDER/g" ./src/aws-exports.js
+        - sed -i "s/PLACEHOLDER_REST_API_URL/$REST_API_URL/g" ./src/aws-exports.js
+        - sed -i "s/PLACEHOLDER_VIDEOS_API_RESOURCE/$VIDEOS_API_RESOURCE/g" ./src/aws-exports.js
         - npm run build
   artifacts:
     baseDirectory: build

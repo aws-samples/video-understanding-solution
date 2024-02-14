@@ -7,6 +7,7 @@ import Form from 'react-bootstrap/Form';
 import InputGroup from 'react-bootstrap/InputGroup';
 import Pagination from 'react-bootstrap/Pagination';
 import Spinner from 'react-bootstrap/Spinner';
+import DatePicker from "react-datepicker";
 
 import {ListObjectsV2Command, GetObjectCommand } from "@aws-sdk/client-s3"; 
 import { InvokeModelWithResponseStreamCommand, InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
@@ -16,6 +17,7 @@ import Row from 'react-bootstrap/Row';
 import Col from 'react-bootstrap/Col';
 
 import './VideoTable.css';
+import "react-datepicker/dist/react-datepicker.css";
 
 export class VideoTable extends Component {
   constructor(props) {
@@ -24,7 +26,9 @@ export class VideoTable extends Component {
       videos: [],
       pages: {},
       firstFetch: false,
-      searchText: "",
+      searchByNameText: "",
+      searchByDateText: "",
+      searchByAboutText: "",
     };
     this.s3Client = props.s3Client
     this.bedrockClient = props.bedrockClient
@@ -35,6 +39,8 @@ export class VideoTable extends Component {
     this.transcriptionFolder = props.transcriptionFolder
     this.videoScriptFolder = props.videoScriptFolder
     this.entitySentimentFolder = props.entitySentimentFolder
+    this.restApiUrl = props.restApiUrl
+    this.videosApiResource = props.videosApiResource
     this.maxCharactersForChat = 5000
     this.maxCharactersForVideoScript = 300000
     this.maxCharactersForSingleLLMCall = 100000
@@ -53,30 +59,36 @@ export class VideoTable extends Component {
   async fetchVideos(page){
     var videos = []
 
-    var token = null
-    if(page > 0) token = this.state.pages[page].token;
+    // Construct filter
+    var params = `?page=${page.toString()}&`
+    if(this.state.searchByNameText != ""){
+      params += `video_name_starts_with=${this.state.searchByNameText}&`
+    }
+    if(this.state.searchByDateText != ""){
+      params += `uploaded_between=${this.state.searchByDateText}&`
+    }
+    if(this.state.searchByAboutText != ""){
+      params += `about=${this.state.searchByAboutText}`
+    }
+
+    // Call API Gateway to fetch the video names
+    const response = await fetch(`${this.restApiUrl}/${this.videosApiResource}${params}`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    })
+    const responseBody = response.body
     
-    const listS3Input = {
-      Bucket: this.bucketName,
-      MaxKeys: Number("25"),
-      Prefix: this.rawFolder + "/" + this.state.searchText,
-      ContinuationToken: token
-    };
-    const listS3Command = new ListObjectsV2Command(listS3Input);
-    const response = await this.s3Client.send(listS3Command);
+    if(responseBody.videos.length == 0) return [videos, this.state.pages];
 
-    if(response.KeyCount == 0) return [videos, this.state.pages];
-
-    for (const i in response.Contents){
-      const vid = response.Contents[i]
-      if (vid.Size <= 0) continue;
-
-      // Get video name
-      const name = vid.Key.replace(new RegExp("^"+ this.rawFolder +"\/", "g"),"")
+    // Add the video representation in the UI
+    for (const i in responseBody.videos){
+      const videoName = responseBody.videos[i]
 
       videos.push({
         index: videos.length,
-        name: name,
+        name: videoName,
         loaded: false,
         summary: undefined,
         entities: undefined,
@@ -90,6 +102,7 @@ export class VideoTable extends Component {
       })
     }
 
+    // Activate the right page on the pagination bar
     var pages = this.state.pages
     var pageFound = false
     for (const pi in pages){
@@ -97,7 +110,6 @@ export class VideoTable extends Component {
         pageFound = true
         pages[pi] = {
           displayName: (page + 1).toString(),
-          token: token,
           active: true,
           index: page
         }
@@ -105,6 +117,7 @@ export class VideoTable extends Component {
         pages[pi].active = false
       }
     }
+    // If the page is not found, add it to the pagination bar
     if(!pageFound){
       pages[page] = {
         displayName: (page + 1).toString(),
@@ -114,10 +127,10 @@ export class VideoTable extends Component {
       }
     }
 
-    if (response.IsTruncated && 'NextContinuationToken' in response){
+    // If there is a next page indicated in the API call return, then either add a new page in pagination bar or just update existing page metadata
+    if ("next_page" in responseBody){
       pages[page+1] = {
         displayName: (page + 2).toString(),
-        token: response.NextContinuationToken,
         active: false,
         index: page + 1
       } 
@@ -435,8 +448,32 @@ export class VideoTable extends Component {
     this.setState({videos: this.state.videos})
   }
 
-  async handleSearchTextChange(event){
-    this.setState({searchText: event.target.value })
+  async handleSearchByNameTextChange(event){
+    this.setState({searchByNameText: event.target.value })
+  }
+
+  async handleSearchByAboutTextChange(event){
+    this.setState({searchByAboutText: event.target.value })
+  }
+
+  async handleSearchByDateTextChange(event){
+    const dateString = event.target.value
+    const dateArray = dateString.split(" - ")
+    const startDate = new Date(dateArray[0]).toISOString()
+    const endDate = new Date(dateArray[1]).toISOString()
+    this.setState({searchByAboutText: `${startDate}|${endDate}` })
+  }
+
+  showLocalStartDate(){
+    if (this.state.searchByDateText == "") return ""
+    const  dateArray = this.state.searchByDateText.split("|")
+    return new Date(dateArray[0].split(" ")[0]).toLocaleDateString()
+  }
+
+  showLocalEndDate(){
+    if (this.state.searchByDateText == "") return ""
+    const  dateArray = this.state.searchByDateText.split("|")
+    return new Date(dateArray[0].split(" ")[1]).toLocaleDateString()
   }
 
   async handleSearch(){
@@ -514,19 +551,37 @@ export class VideoTable extends Component {
       <Row>
         <Col>
           <Row>
-            <Col>
+            <Col> 
               <InputGroup className="mb-3">
+                <Form.Label>Search videos with filters:</Form.Label>
                 <Form.Control
                   type="text"
-                  placeholder="Search video by name or name prefix"
-                  aria-label="Search"
-                  onChange={this.handleSearchTextChange.bind(this)}
-                  value={this.state.searchText}
+                  placeholder="Name starts with . . ."
+                  aria-label="SearchName"
+                  onChange={this.handleSearchByNameTextChange.bind(this)}
+                  value={this.state.searchByNameText}
                 />
-                <Button onClick={this.handleSearch.bind(this)} variant="success" id="search-video">
-                  Search
-                </Button>
-              </InputGroup>
+                <DatePicker
+                  onChange={this.handleSearchByDateTextChange.bind(this)}
+                  startDate={this.showLocalStartDate()}
+                  endDate={this.showLocalEndDate()}
+                  selectsRange={true}
+                  isClearable={true}
+                  showIcon={True}
+                  placeholderText="Uploaded between . . ."
+                />
+             </InputGroup>
+             <Form.Control
+                type="text"
+                placeholder="Video is about . . .  (genAI-powered)"
+                aria-label="SearchAbout"
+                onChange={this.handleSearchByAboutTextChange.bind(this)}
+                value={this.state.searchByAboutText}
+              />
+              <Button onClick={this.handleSearch.bind(this)} variant="success" id="search-video">
+                Search
+              </Button>
+              
             </Col>
             {/* <Col></Col> */}
           </Row>

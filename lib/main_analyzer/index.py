@@ -4,7 +4,7 @@ import boto3
 from botocore.config import Config
 from sqlalchemy import create_engine, Column, DateTime, String, Text, Integer, func, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import Session, mapped_column
+from sqlalchemy.orm import mapped_column, sessionmaker
 from sqlalchemy.dialects.postgresql import insert as db_insert
 from sqlalchemy.dialects.postgresql import updatet as db_update
 from pgvector.sqlalchemy import Vector
@@ -17,11 +17,14 @@ config = Config(read_timeout=1000) # Extends botocore read timeout to 1000 secon
 
 rekognition = boto3.client('rekognition')
 transcribe = boto3.client("transcribe")
-sagemaker = boto3.client("sagemaker-runtime")
+#sagemaker = boto3.client("sagemaker-runtime")
+secrets_manager = boto3.client('secretsmanager')
 bedrock = boto3.client(service_name="bedrock-runtime", config=config)
 s3 = boto3.client("s3")
 
 model_id = os.environ["MODEL_ID"]
+embedding_model_id = os.environ["EMBEDDING_MODEL_ID"]
+embedding_dimension = os.environ['EMBEDDING_DIMENSION']
 bucket_name = os.environ["BUCKET_NAME"]
 raw_folder = os.environ["RAW_FOLDER"]
 video_script_folder = os.environ["VIDEO_SCRIPT_FOLDER"]
@@ -36,7 +39,6 @@ content_table_name = os.environ['CONTENT_TABLE_NAME']
 secret_name = os.environ['SECRET_NAME']
 writer_endpoint = os.environ['DB_WRITER_ENDPOINT']
 
-secrets_manager = boto3.client('secretsmanager')
 credentials = json.loads(secrets_manager.get_secret_value(SecretId=self.secret_name)["SecretString"])
 username = credentials["username"]
 password = credentials["password"]
