@@ -1,14 +1,16 @@
 import json, os
 import boto3
-from sqlalchemy import create_engine, Column, DateTime, String, Array, Float
+from sqlalchemy import create_engine, Column, Text, DateTime, String, func
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy.orm import Session, mapped_column
+from sqlalchemy.dialects.postgresql import insert as db_insert
+from pgvector.sqlalchemy import Vector
 
 database_name = os.environ['DATABASE_NAME']
 video_table_name = os.environ['VIDEO_TABLE_NAME']
 secret_name = os.environ['SECRET_NAME']
 writer_endpoint = os.environ['DB_WRITER_ENDPOINT']
+embedding_dimension = os.environ['EMBEDDING_DIMENSION']
 
 secrets_manager = boto3.client('secretsmanager')
 credentials = json.loads(secrets_manager.get_secret_value(SecretId=self.secret_name)["SecretString"])
@@ -18,13 +20,13 @@ password = credentials["password"]
 engine = create_engine(f'postgresql://{username}:{password}@{writer_endpoint}:5432/{database_name}')
 Base = declarative_base()
 
-class Video(Base):
+class Videos(Base):
     __tablename__ = video_table_name
     
-    name = Column(String, primary_key=True)
-    uploaded_at = Column(DateTime(timezone=True))
-    summary = Column(String)
-    summary_embedding = Column(Array(Float))
+    name = Column(String(200), primary_key=True, nullable=False)
+    uploaded_at = Column(DateTime(timezone=True), nullable=False)
+    summary = Column(Text)
+    summary_embedding = mapped_column(Vector(int(embedding_dimension)))
     
 Session = sessionmaker(bind=engine)  
 session = Session()
@@ -47,8 +49,23 @@ def handler(event, context):
         }
 
     # Insert new video to database
-    video = Video(name=video_name, uploaded_at=func.now(tz="UTC"))
-    session.add(video)
+    video = Videos(name=video_name, uploaded_at=func.now(tz="UTC"))
+
+    upsert = db_insert(Videos).values(
+        name=video.name,
+        uploaded_at=video.uploaded_at
+    ) 
+
+    # On conflict clause 
+    upsert = upsert.on_conflict_do_update(
+        constraint=f"{video_table_name}_pkey",
+        set_={
+            Videos.uploaded_at=video.uploaded_at, 
+        }
+    )
+
+    # Execute the upsert
+    session.execute(upsert)
     session.commit()
 
     return {

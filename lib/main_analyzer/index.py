@@ -1,7 +1,17 @@
-import os, time, json, copy, math
+import os, time, json, copy, math, re
 from abc import ABC, abstractmethod
 import boto3
 from botocore.config import Config
+from sqlalchemy import create_engine, Column, DateTime, String, Text, Integer, func, ForeignKey
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import Session, mapped_column
+from sqlalchemy.dialects.postgresql import insert as db_insert
+from sqlalchemy.dialects.postgresql import updatet as db_update
+from pgvector.sqlalchemy import Vector
+
+truncation_for_text = 50
+truncation_for_scene = 50
+video_script_storage_chunk_size = 10000 # characters
 
 config = Config(read_timeout=1000) # Extends botocore read timeout to 1000 seconds
 
@@ -19,8 +29,23 @@ transcription_folder = os.environ["TRANSCRIPTION_FOLDER"]
 entity_sentiment_folder = os.environ["ENTITY_SENTIMENT_FOLDER"]
 summary_folder = os.environ["SUMMARY_FOLDER"]
 
-truncation_for_text = 50
-truncation_for_scene = 50
+database_name = os.environ['DATABASE_NAME']
+video_table_name = os.environ['VIDEO_TABLE_NAME']
+entities_table_name = os.environ['ENTITIES_TABLE_NAME']
+content_table_name = os.environ['CONTENT_TABLE_NAME']
+secret_name = os.environ['SECRET_NAME']
+writer_endpoint = os.environ['DB_WRITER_ENDPOINT']
+
+secrets_manager = boto3.client('secretsmanager')
+credentials = json.loads(secrets_manager.get_secret_value(SecretId=self.secret_name)["SecretString"])
+username = credentials["username"]
+password = credentials["password"]
+
+engine = create_engine(f'postgresql://{username}:{password}@{writer_endpoint}:5432/{database_name}')
+Base = declarative_base()
+
+Session = sessionmaker(bind=engine)  
+session = Session()
 
 def handler(event, context)
     print("received event:")
@@ -60,18 +85,60 @@ def handler(event, context)
     }
 
 def store_summary_result(summary, video_name):
+    # Store summary in S3
     s3.put_object(
         Body=summary, 
         Bucket=bucket_name, 
         Key=f"{summary_folder}/{video_name}.txt"
     )
 
-def store_sentiment_result(sentiment, video_name):
+    # Get summary embedding
+    body = json.dumps(
+        {
+            "inputText": summary,
+        }
+    )
+    response = bedrock.invoke_model(body=body, modelId=embedding_model_id)
+    # Disabling semgrep rule for checking data size to be loaded to JSON as the source is from Amazon Bedrock
+    # nosemgrep: python.aws-lambda.deserialization.tainted-json-aws-lambda.tainted-json-aws-lambda
+    summary_embedding = json.loads(response.get("body").read())["embedding"]
+
+    # Store summary in database
+    update_stmt = update(Videos).where(Videos.name == video_name).values(
+        summary=summary,
+        summary_embedding = summary_embedding
+    )
+    
+    session.execute(update_stmt)
+    session.commit()
+
+def store_sentiment_result(sentiment_string, video_name):
+    # Extract entities and sentiment from the string
+    entities_dict = {}
+    entity_regex = r"^([\w\s]+?):(positive|negative|neutral|mixed)"
+    for match in re.finditer(entity_regex, sentiment_string):
+        entity = match.group(1).strip()
+        sentiment = match.group(2)
+        entities_dict[entity] = sentiment
+
     s3.put_object(
-        Body=sentiment, 
+        Body="\n".join(f"{e} : {s}" for e, s in entities_dict.items()), 
         Bucket=bucket_name, 
         Key=f"{entity_sentiment_folder}/{video_name}.txt"
     )
+
+    entities = []
+    for entity, sentiment in entities_dict.items():
+        # Store entity in database
+        entities.append(Entities(
+            name=entity,
+            sentiment=sentiment,
+            video_name=video_name
+        ))
+
+    # Store into database
+    session.add_all(entities)
+    session.commit()
     
 def store_video_script_result(video_script, video_name):
     s3.put_object(
@@ -79,6 +146,55 @@ def store_video_script_result(video_script, video_name):
         Bucket=bucket_name, 
         Key=f"{video_script_folder}/{video_name}.txt"
     )
+
+    # Chunking the video script for storage in DB while converting them to embedding
+    video_script_length = len(video_script)
+    number_of_chunks = math.ceil( (video_script_length + 1) / video_script_storage_chunk_size )
+
+    chunks = []
+    for chunk_number in range(0, number_of_chunks):
+        is_last_chunk = (chunk_number == (number_of_chunks - 1))
+        is_first_chunk = (chunk_number == 0)
+
+        start = 0 if is_first_chunk else int(chunk_number*video_script_storage_chunk_size)
+        stop = video_script_length if is_last_chunk else (chunk_number+1)*video_script_storage_chunk_size
+        chunk_string = video_script[start:stop]
+    
+        # So long as this is not the first chunk, remove whatever before first \n since likely the chunk cutting is not done exactly at the \n
+        if not is_first_chunk:
+            chunk_string = chunk_string[chunk_string.index("\n"):] 
+        
+        # Get the embedding for the chunk
+        body = json.dumps(
+            {
+                "inputText": chunk_string,
+            }
+        )
+        call_done = False
+        while(not call_done):
+            try:
+                response = bedrock.invoke_model(body=body, modelId=embedding_model_id)
+                call_done = True
+            except ThrottlingException:
+                print("Amazon Bedrock throttling exception")
+                time.sleep(60)
+            except Exception as e:
+                raise e
+
+        # Disabling semgrep rule for checking data size to be loaded to JSON as the source is from Amazon Bedrock
+        # nosemgrep: python.aws-lambda.deserialization.tainted-json-aws-lambda.tainted-json-aws-lambda
+        chunk_embedding = json.loads(response.get("body").read())["embedding"]
+        
+        # Create database object
+        chunks.append(Contents(
+            chunk=chunk_string,
+            chunk_embedding=chunk_embedding,
+            video_name=video_name
+        ))
+
+    # Store in database
+    session.add_all(chunks)
+    session.commit()
 
 def analyze_video(labels_job_id, texts_job_id, video_name, video_transcript_s3_path):
     video_scenes, video_length = visual_scenes_iterate_pages(labels_job_id)
@@ -180,6 +296,30 @@ def visual_texts_iterate_pages(texts_job_id):
         texts = extract_visual_texts(texts, getTextDetection)
     
     return texts
+
+class Videos(Base):
+    __tablename__ = video_table_name
+    
+    name = Column(String(200), primary_key=True, nullable=False)
+    uploaded_at = Column(DateTime(timezone=True), nullable=False)
+    summary = Column(Text)
+    summary_embedding = mapped_column(Vector(int(embedding_dimension)))
+
+class Entities(Base):
+    __tablename__ = entities_table_name
+    
+    id = Column(Integer, primary_key=True) 
+    name = Column(String(100), nullable=False)
+    sentiment = Column(String(20), nullable=False)
+    video_name = Column(ForeignKey(f"{video_table_name}.name"), nullable=False)
+    
+class Contents(Base):
+    __tablename__ = content_table_name
+    
+    id = Column(Integer, primary_key=True)
+    chunk = Column(Text, nullable=False)
+    chunk_embedding = Column(Vector(int(embedding_dimension))) 
+    video_name = Column(ForeignKey(f"{video_table_name}.name"), nullable=False)
     
 class VideoAnalyzer(ABC):
     def __init__(self, video_length, video_scenes, video_texts, transcript):
@@ -549,7 +689,8 @@ class VideoAnalyzerBedrock(VideoAnalyzer):
         print("Response from LLM")
         print(response)
         return response
-      
+
+# Legacy
 class VideoAnalyzerSageMaker(VideoAnalyzer):
     def __init__(self, endpoint_name, video_length, video_scenes, video_texts, transcript):
         super().__init__(video_length, video_scenes, video_texts, transcript)

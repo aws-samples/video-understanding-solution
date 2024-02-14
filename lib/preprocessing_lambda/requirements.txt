@@ -1,1 +1,2 @@
 SQLAlchemy>=2.0.26
+pgvector>=0.2.5

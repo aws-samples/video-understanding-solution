@@ -29,6 +29,7 @@ from cdk_nag import AwsSolutionsChecks, NagSuppressions
 
 #model_id = "anthropic.claude-v2:1"
 model_id = "anthropic.claude-instant-v1"
+embedding_model_id = "amazon.titan-embed-text-v1"
 visual_scene_detection_confidence_threshold = 98.0
 visual_text_detection_confidence_threshold = 98.0
 raw_folder = "source"
@@ -344,10 +345,11 @@ class VideoUnderstandingSolutionStack(Stack):
             vpc=vpc,
             vpc_subnets=private_with_egress_subnets,
             environment = {
-                'DB_WRITER_ENDPOINT': self.db_reader_endpoint.hostname,
+                'DB_WRITER_ENDPOINT': self.db_writer_endpoint.hostname,
                 'DATABASE_NAME': database_name,
                 'VIDEO_TABLE_NAME': video_table_name,
                 'SECRET_NAME': self.db_secret_name,
+                'EMBEDDING_DIMENSION': str(embedding_dimension)
             }
         )
 
@@ -618,8 +620,8 @@ class VideoUnderstandingSolutionStack(Stack):
 
         # Task definition for main analyzer
         analyzer_task_definition = _ecs.FargateTaskDefinition(self, "TaskDefinition",
-            cpu=256,
-            memory_limit_mib=512,
+            cpu=512,
+            memory_limit_mib=1024,
             task_role= main_analyzer_role,
             execution_role= main_analyzer_execution_role
         )
@@ -690,7 +692,22 @@ class VideoUnderstandingSolutionStack(Stack):
                 container_definition=analyzer_container_definition,
                 environment=[
                     _sfn_tasks.TaskEnvironmentVariable(
-                        name="INPUT_DATA", value=_sfn.JsonPath.string_at("$")
+                        name="INPUT_DATA", value=_sfn.JsonPath.string_at("$"),
+                        name='DATABASE_NAME', value= database_name,
+                        name='VIDEO_TABLE_NAME', value= video_table_name,
+                        name='ENTITIES_TABLE_NAME', value= entities_table_name,
+                        name='CONTENT_TABLE_NAME', value= content_table_name,
+                        name='SECRET_NAME', value= self.db_secret_name,
+                        name="EMBEDDING_DIMENSION", value=str(embedding_dimension),
+                        name='DB_WRITER_ENDPOINT', value= self.db_writer_endpoint,
+                        name="EMBEDDING_MODEL_ID", value= embedding_model_id,
+                        name="MODEL_ID", value= model_id,
+                        name="BUCKET_NAME", value= video_bucket_s3.bucket_name,
+                        name="RAW_FOLDER", value= raw_folder,
+                        name="VIDEO_SCRIPT_FOLDER", value= video_script_folder,
+                        name="TRANSCRIPTION_FOLDER", value= transcription_folder,
+                        name="ENTITY_SENTIMENT_FOLDER", value= entity_sentiment_folder,
+                        name="SUMMARY_FOLDER", value= summary_folder
                     )
                 ]
             )],
