@@ -1,4 +1,4 @@
-import os
+import os, json
 from aws_cdk import (
     # Duration,
     Stack,
@@ -10,6 +10,7 @@ from aws_cdk import (
     aws_events as _events,
     aws_events_targets as _events_targets,
     aws_lambda as _lambda,
+    aws_ecs as _ecs,
     aws_logs as _logs,
     aws_stepfunctions as _sfn,
     aws_stepfunctions_tasks as _sfn_tasks,
@@ -22,6 +23,7 @@ from aws_cdk import (
 )
 from constructs import Construct
 from aws_cdk.custom_resources import Provider
+from aws_cdk.aws_ecr_assets import DockerImageAsset
 from cdk_nag import AwsSolutionsChecks, NagSuppressions
 
 
@@ -38,7 +40,10 @@ entity_sentiment_folder = "sentiment"
 database_name = "videos"
 video_table_name = "videos"
 entities_table_name = "entities"
+content_table_name = "content"
 embedding_dimension = 1536
+
+BASE_DIR = os.getcwd()
 
 class VideoUnderstandingSolutionStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
@@ -109,10 +114,10 @@ class VideoUnderstandingSolutionStack(Stack):
             { "id": 'AwsSolutions-IAM5', "reason": 'Allow using * in the policy for bucket notification as this is managed by CDK. '}
         ], True)
 
-        # EventBridge - Rule mp4
-        new_mp4_video_uploaded_rule = _events.Rule(
+        # EventBridge - Rule
+        new_video_uploaded_rule = _events.Rule(
             self,
-            "New mp4 video uploaded rule",
+            f"{construct_id}-new-video-uploaded",
             event_pattern=_events.EventPattern(
                 source=["aws.s3"],
                 detail_type=["Object Created"],
@@ -121,39 +126,234 @@ class VideoUnderstandingSolutionStack(Stack):
                         "name": _events.Match.exact_string(video_bucket_s3.bucket_name)
                     },
                     "object": {
-                        "key": [{ "wildcard": f"{raw_folder}/*.mp4"}]
+                        "key": [{ "wildcard": f"{raw_folder}/*"}]
                     },
                 },
             ),
         )
-        # EventBridge - Rule MP4
-        new_MP4_video_uploaded_rule = _events.Rule(
-            self,
-            "New MP4 video uploaded rule",
-            event_pattern=_events.EventPattern(
-                source=["aws.s3"],
-                detail_type=["Object Created"],
-                detail={
-                    "bucket": {
-                        "name": _events.Match.exact_string(video_bucket_s3.bucket_name)
-                    },
-                    "object": {
-                        "key": [{ "wildcard": f"{raw_folder}/*.MP4"}]
-                    },
-                },
-            ),
-        )
+
         # Suppress cdk_nag rule to allow for using AWSLambdaBasicExecutionRole managed role/policy and for using <arn>* in the IAM policy since video file names can vary
-        NagSuppressions.add_resource_suppressions(new_mp4_video_uploaded_rule, [
+        NagSuppressions.add_resource_suppressions(new_video_uploaded_rule, [
             { "id": 'AwsSolutions-IAM4', "reason": 'Allow using AWSLambdaBasicExecutionRole managed role/policy'},
             { "id": 'AwsSolutions-IAM5', "reason": 'Allow using <arn>* in the policy since video file names can vary'}
         ], True)
 
-        # Suppress cdk_nag rule to allow for using AWSLambdaBasicExecutionRole managed role/policy and for using <arn>* in the IAM policy since video file names can vary
-        NagSuppressions.add_resource_suppressions(new_MP4_video_uploaded_rule, [
-            { "id": 'AwsSolutions-IAM4', "reason": 'Allow using AWSLambdaBasicExecutionRole managed role/policy'},
-            { "id": 'AwsSolutions-IAM5', "reason": 'Allow using <arn>* in the policy since video file names can vary'}
+        # Subnet group
+        db_subnet_group = _rds.SubnetGroup(self, f"DBSubnetGroup",
+           vpc = vpc,
+           description = "Aurora subnet group",
+           vpc_subnets = private_subnets,
+           subnet_group_name= "Aurora subnet group"
+        )
+
+        # Creating security group to be used by Lambda function that rotates DB secret
+        secret_rotation_security_group = _ec2.SecurityGroup(self, 'RotateDBSecurityGroup',
+            security_group_name = f"{construct_id}-vectorDB-secret-rotator",
+            vpc = vpc,
+            allow_all_outbound = True,
+            description = "Security group for Lambda function that rotates DB secret",
+        )
+
+        # Creating the database security group
+        db_security_group = _ec2.SecurityGroup(self, "VectorDBSecurityGroup",
+            security_group_name = f"{construct_id}-vectorDB",
+            vpc = vpc,
+            allow_all_outbound = True,
+            description = "Security group for Aurora Serverless PostgreSQL",
+        )
+
+        db_security_group.add_ingress_rule(
+            peer =db_security_group,
+            connection =_ec2.Port(protocol=_ec2.Protocol("ALL"), string_representation="ALL"),
+            description="Any in connection from self"
+        )
+        
+        db_security_group.add_ingress_rule(
+            peer =_ec2.Peer.ipv4(vpc.vpc_cidr_block),
+            connection =_ec2.Port(protocol=_ec2.Protocol("TCP"), from_port=5432, to_port=5432, string_representation="tcp5432 PostgreSQL"),
+            description="Postgresql port in from within the VPC"
+        )
+
+        db_security_group.add_ingress_rule(
+          peer= _ec2.Peer.security_group_id(secret_rotation_security_group.security_group_id),
+          connection=_ec2.Port.tcp(5432),
+          description="Allow DB access from Lambda Functions that rotate Secrets"
+        )
+
+        # Create secret for use with Aurora Serverless
+        aurora_cluster_username="clusteradmin"
+        aurora_cluster_secret = _secretsmanager.Secret(self, "AuroraClusterCredentials",
+          secret_name = f"{construct_id}-vectorDB-creds",
+          description = "Aurora Cluster Credentials",
+          generate_secret_string=_secretsmanager.SecretStringGenerator(
+            exclude_characters ="\"@/\\ '",
+            generate_string_key ="password",
+            password_length =30,
+            secret_string_template=json.dumps(
+              {
+                "username": aurora_cluster_username,
+                "engine": "postgres"
+              })),
+        )
+        aurora_cluster_secret.add_rotation_schedule(
+          id="1",
+          automatically_after=Duration.days(30),
+          hosted_rotation=_secretsmanager.HostedRotation.postgre_sql_single_user(
+            security_groups=[secret_rotation_security_group],
+            vpc=vpc,
+            vpc_subnets=private_with_egress_subnets
+          )
+        )
+        self.db_secret_arn = aurora_cluster_secret.secret_full_arn
+        self.db_secret_name = aurora_cluster_secret.secret_name
+        aurora_cluster_credentials = _rds.Credentials.from_secret(aurora_cluster_secret, aurora_cluster_username)
+        
+        # Provisioning the Aurora Serverless database
+        aurora_cluster = _rds.DatabaseCluster(self, f"{construct_id}AuroraDatabase",
+          credentials= aurora_cluster_credentials,
+          iam_authentication=True,
+          engine= _rds.DatabaseClusterEngine.aurora_postgres(version=_rds.AuroraPostgresEngineVersion.VER_15_5),
+          writer=_rds.ClusterInstance.serverless_v2("writer"),
+          readers=[
+            _rds.ClusterInstance.serverless_v2("reader1",  scale_with_writer=True),
+          ],
+          serverless_v2_min_capacity=0.5,
+          serverless_v2_max_capacity=1,
+          default_database_name=database_name,
+          security_groups=[db_security_group],
+          vpc=vpc,
+          subnet_group=db_subnet_group,
+          storage_encrypted=True,
+          deletion_protection=True,
+        )
+        
+        self.db_writer_endpoint = aurora_cluster.cluster_endpoint
+        self.db_reader_endpoint = aurora_cluster.cluster_read_endpoint
+        
+        # Lambda for setting up database
+        db_setup_event_handler = _lambda.Function(self, "DatabaseSetupHandler",
+            function_name=f"{construct_id}-DatabaseSetupHandler",
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            timeout=Duration.minutes(1),
+            code=_lambda.Code.from_asset('./lib/db_setup_lambda',
+                bundling= BundlingOptions(
+                  image= _lambda.Runtime.PYTHON_3_12.bundling_image,
+                  command= [
+                    'bash',
+                    '-c',
+                    'pip install -r requirements.txt -t /asset-output && cp -au . /asset-output',
+                  ],
+                )
+            ),
+            environment = {
+                'DB_WRITER_ENDPOINT': self.db_writer_endpoint.hostname,
+                'DATABASE_NAME': database_name,
+                'VIDEO_TABLE_NAME': video_table_name,
+                'ENTITIES_TABLE_NAME': entities_table_name,
+                'CONTENT_TABLE_NAME': content_table_name,
+                'SECRET_NAME': self.db_secret_name,
+                "EMBEDDING_DIMENSION": str(embedding_dimension)
+            },
+            vpc=vpc,
+            vpc_subnets=private_with_egress_subnets,
+            handler='index.on_event'
+        )
+
+        # Suppress CDK nag rule to allow the use of AWS managed policies/roles AWSLambdaVPCAccessExecutionRole and AWSLambdaBasicExecutionRole
+        NagSuppressions.add_resource_suppressions(db_setup_event_handler, [
+            { "id": 'AwsSolutions-IAM4', "reason": 'Allow the use of AWS managed policies/roles AWSLambdaVPCAccessExecutionRole and AWSLambdaBasicExecutionRole'},
         ], True)
+        
+        # IAM Policy statement for the Lambda function that configures the database
+        statement = _iam.PolicyStatement()
+        statement.add_actions("secretsmanager:GetSecretValue")
+        statement.add_resources(aurora_cluster_secret.secret_full_arn)
+        db_setup_event_handler.add_to_role_policy(statement)
+ 
+ 
+        provider = Provider(self, f'{construct_id}DatabaseSetupProvider', 
+                    on_event_handler=db_setup_event_handler)
+
+        
+        # Suppress cdk_nag rule for using not the latest runtime for non container Lambda, as this is managed by CDK Provider.
+        # Also suppress it for using * in IAM policy and for using managed policy, as this is managed by CDK Provider.
+        NagSuppressions.add_resource_suppressions(provider, [
+            { "id": 'AwsSolutions-L1', "reason": "The Lambda function's runtime is managed by CDK Provider. Solution is to update CDK version."},
+            { "id": 'AwsSolutions-IAM4', "reason": 'The Lambda function is managed by Provider'},
+            { "id": 'AwsSolutions-IAM5', "reason": 'The Lambda function is managed by Provider.'}
+        ], True)
+
+
+        db_setup_custom_resource = CustomResource(
+            scope=self,
+            id='DatabaseSetup',
+            service_token=provider.service_token,
+            removal_policy=RemovalPolicy.DESTROY,
+            resource_type="Custom::DatabaseSetupCustomResource"
+        )
+
+        db_setup_custom_resource.node.add_dependency(aurora_cluster) 
+
+        # Role for the preprocessing Lambda
+        preprocessing_lambda_role = _iam.Role(
+            id="PreprocessingLambdaRole",
+            scope=self,
+            role_name=f"{construct_id}-preprocessing-lambda",
+            assumed_by=_iam.ServicePrincipal("lambda.amazonaws.com"),
+            inline_policies={
+                "PeprocessingLambdaPolicy": _iam.PolicyDocument(
+                    statements=[
+                        _iam.PolicyStatement(
+                            actions=["secretsmanager:GetSecretValue"],
+                            resources=[aurora_cluster_secret.secret_full_arn],
+                            effect=_iam.Effect.ALLOW,
+                        ),
+                    ]
+                )
+            },
+            managed_policies=[
+                _iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSLambdaBasicExecutionRole"),
+                _iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSLambdaVPCAccessExecutionRole")
+            ],
+        )
+
+
+        # Suppress cdk_nag it for using * in IAM policy as reasonable in the resources and for using AWSLambdaBasicExecutionRole  and AWSLambdaVPCAccessExecutionRole managed role by AWS.
+        NagSuppressions.add_resource_suppressions(preprocessing_lambda_role, [
+            { "id": 'AwsSolutions-IAM4', "reason": 'Allow to use AWSLambdaBasicExecutionRole and AWSLambdaVPCAccessExecutionRole AWS managed service role'},
+        ], True)
+        
+
+        # Lambda function to run the video preprocessing task
+        preprocessing_lambda = _lambda.Function(self, "PreprocessingLambda",
+            function_name=f"{construct_id}-preprocessing",
+            handler='index.handler',
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            code=_lambda.Code.from_asset('./lib/preprocessing_lambda', 
+                bundling= BundlingOptions(
+                    image= _lambda.Runtime.PYTHON_3_12.bundling_image,
+                    command= [
+                    'bash',
+                    '-c',
+                    'pip install -r requirements.txt -t /asset-output && cp -au . /asset-output',
+                    ],
+                )),
+            role=preprocessing_lambda_role,                                    
+            timeout=Duration.minutes(3),
+            memory_size=256,
+            vpc=vpc,
+            vpc_subnets=private_with_egress_subnets,
+            environment = {
+                'DB_WRITER_ENDPOINT': self.db_reader_endpoint.hostname,
+                'DATABASE_NAME': database_name,
+                'VIDEO_TABLE_NAME': video_table_name,
+                'SECRET_NAME': self.db_secret_name,
+            }
+        )
+
+        preprocessing_task = _sfn_tasks.LambdaInvoke(self, "CallPreprocessingLambda",
+            lambda_function=preprocessing_lambda,
+        )
 
         # Step function task to start the Rekognition label detection task to detect visual scenes
         start_rekognition_label_detection_sfn_task = _sfn_tasks.CallAwsService(
@@ -329,21 +529,38 @@ class VideoUnderstandingSolutionStack(Stack):
         start_transcription_job_sfn_task.next(get_transcription_job_sfn_task).next(transcription_choice)
         transcription_choice.when(transcription_success_condition, transcription_success).when(transcription_failure_condition, transcription_failure).otherwise(transcription_wait)
 
+        # Define the parallel tasks for Rekognition and Transcribe.
         parallel_sfn = _sfn.Parallel(self, "StartVideoAnalysisParallelSfn")
         parallel_sfn = parallel_sfn.branch(
             start_rekognition_label_detection_sfn_task,
             start_rekognition_text_detection_sfn_task,
             start_transcription_job_sfn_task,
         )
-        
-        # Role for the main video analysis lambda
-        main_analyzer_lambda_role = _iam.Role(
-            id="MainAnalyzerLambdaRole",
+
+        # Chain parallel task after preprocessing lambda
+        preprocessing_task.next(parallel_sfn)
+
+        # Role for the main video analysis ECS task execution
+        main_analyzer_execution_role = _iam.Role(
+            id="MainAnalyzerExecutionRole",
             scope=self,
-            role_name=f"MainAnalyzerLambdaRole",
-            assumed_by=_iam.ServicePrincipal("lambda.amazonaws.com"),
+            role_name=f"{construct_id}-main-analyzer-execution",
+            assumed_by=_iam.ServicePrincipal("ecs-tasks.amazonaws.com")
+            managed_policies=[
+                #_iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSLambdaBasicExecutionRole"),
+                #_iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSLambdaVPCAccessExecutionRole")
+                _iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AmazonECSTaskExecutionRolePolicy")
+            ],
+        )
+
+        # Role for the main video analysis
+        main_analyzer_role = _iam.Role(
+            id="MainAnalyzerRole",
+            scope=self,
+            role_name=f"{construct_id}-main-analyzer",
+            assumed_by=_iam.ServicePrincipal("ecs-tasks.amazonaws.com"), #_iam.ServicePrincipal("lambda.amazonaws.com"),
             inline_policies={
-                "MainAnalyzerLambdaPolicy": _iam.PolicyDocument(
+                "MainAnalyzerPolicy": _iam.PolicyDocument(
                     statements=[
                         _iam.PolicyStatement(
                             actions=["bedrock:InvokeModel"],
@@ -382,21 +599,52 @@ class VideoUnderstandingSolutionStack(Stack):
                     ]
                 )
             },
-            managed_policies=[
-                _iam.ManagedPolicy.from_aws_managed_policy_name(
-                    "service-role/AWSLambdaBasicExecutionRole"
-                )
-            ],
         )
 
 
-        # Suppress cdk_nag it for using * in IAM policy as reasonable in the resources and for using AWSLambdaBasicExecutionRole managed role by AWS.
-        NagSuppressions.add_resource_suppressions(main_analyzer_lambda_role, [
-            { "id": 'AwsSolutions-IAM4', "reason": 'Allow to use AWSLambdaBasicExecutionRole AWS managed service role'},
+        # Suppress cdk_nag it for using * in IAM policy as reasonable in the resources and for using AWSLambdaBasicExecutionRole and AWSLambdaVPCAccessExecutionRole managed role by AWS.
+        NagSuppressions.add_resource_suppressions(main_analyzer_role, [
+            { "id": 'AwsSolutions-IAM4', "reason": 'Allow to use AmazonECSTaskExecutionRolePolicy AWS managed service role'},
             { "id": 'AwsSolutions-IAM5', "reason": 'Allow to use * for Rekognition read APIs which resources have to be *, and to use <arn>/* for Transcribe GetTranscriptionJob as the job name can vary'}
         ], True)
-        
 
+        # ECS cluster for main analyzer
+        ecs_cluster = _ecs.Cluster(
+            self,
+            "ECSCluster",
+            cluster_name=f"{construct_id}-ecs-cluster",
+            enable_fargate_capacity_providers=True
+        )
+
+        # Task definition for main analyzer
+        analyzer_task_definition = _ecs.FargateTaskDefinition(self, "TaskDefinition",
+            cpu=256,
+            memory_limit_mib=512,
+            task_role= main_analyzer_role,
+            execution_role= main_analyzer_execution_role
+        )
+
+        # Log group for the container
+        main_analyzer_log_group = _logs.LogGroup(self, "WSAccessLogGroup", log_group_name=f"{construct_id}-analyzer")
+
+        analyzer_container_definition = analyzer_task_definition.add_container("analyzer",
+            image=_ecs.ContainerImage.from_docker_image_asset(
+                DockerImageAsset(self, "AnalyzerImageBuild",
+                    directory=f"{BASE_DIR}/lib/main_analyzer/analyzer"
+                )
+            ),
+            memory_limit_mib=512,
+            logging=_ecs.LogDrivers.aws_logs(
+                log_group=main_analyzer_log_group,
+                stream_prefix="main",
+                mode=_ecs.AwsLogDriverMode.NON_BLOCKING,
+                max_buffer_size=Size.mebibytes(25)
+            )
+
+        )
+
+        
+        """
         # Lambda function to run the main video analysis
         main_analyzer_lambda = _lambda.Function(self, f'MainAnalyzerLambda',
            handler='index.handler',
@@ -424,9 +672,28 @@ class VideoUnderstandingSolutionStack(Stack):
                 "SUMMARY_FOLDER": summary_folder
            }
         )
+        """
 
-        main_analyzer_task = _sfn_tasks.LambdaInvoke(self, "CallMainAnalyzerLambda",
-            lambda_function=main_analyzer_lambda,
+        #main_analyzer_task = _sfn_tasks.LambdaInvoke(self, "CallMainAnalyzerLambda",
+        #    lambda_function=main_analyzer_lambda,
+        #)
+
+        main_analyzer_task = _sfn_tasks.EcsRunTask(self, "CallMainAnalyzer",
+            integration_pattern=_sfn.IntegrationPattern.RUN_JOB,
+            cluster=ecs_cluster,
+            task_definition=analyzer_task_definition,
+            assign_public_ip=True,
+            launch_target=_sfn_tasks.EcsFargateLaunchTarget(
+                platform_version=_ecs.FargatePlatformVersion.1.4
+            ),
+            container_overrides=[_sfn_tasks.ContainerOverride(
+                container_definition=analyzer_container_definition,
+                environment=[
+                    _sfn_tasks.TaskEnvironmentVariable(
+                        name="INPUT_DATA", value=_sfn.JsonPath.string_at("$")
+                    )
+                ]
+            )],
         )
         
         # Chain the analysis step after the parallel step
@@ -439,7 +706,7 @@ class VideoUnderstandingSolutionStack(Stack):
         video_analysis_sfn = _sfn.StateMachine(
             self,
             "StartVideoAnalysisSfn",
-            definition_body=_sfn.DefinitionBody.from_chainable(parallel_sfn),
+            definition_body=_sfn.DefinitionBody.from_chainable(preprocessing_task),
             logs=_sfn.LogOptions(
                 destination=sfn_log_group,
                 level=_sfn.LogLevel.ALL
@@ -472,20 +739,8 @@ class VideoUnderstandingSolutionStack(Stack):
             },
         )
         
-        # Add target for EventBridge to trigger Step Function for mp4 videos
-        new_mp4_video_uploaded_rule.add_target(
-          _events_targets.SfnStateMachine(video_analysis_sfn,
-            input= _events.RuleTargetInput.from_object({
-              'detailType': _events.EventField.detail_type,
-              'eventId': _events.EventField.from_path('$.id'),
-              'videoS3Path': _events.EventField.from_path('$.detail.object.key'),
-              'videoS3BucketName': _events.EventField.from_path('$.detail.bucket.name')
-            }),
-            role=event_bridge_role)
-        )
-
-        # Add target for EventBridge to trigger Step Function for MP4 videos
-        new_MP4_video_uploaded_rule.add_target(
+        # Add target for EventBridge to trigger Step Function for videos
+        new_video_uploaded_rule.add_target(
           _events_targets.SfnStateMachine(video_analysis_sfn,
             input= _events.RuleTargetInput.from_object({
               'detailType': _events.EventField.detail_type,
@@ -605,7 +860,6 @@ class VideoUnderstandingSolutionStack(Stack):
         )
 
         # CodeCommit repo
-        BASE_DIR = os.getcwd()
         branch_name = "main"
         repo = _codecommit.Repository(
           self,
@@ -763,162 +1017,6 @@ class VideoUnderstandingSolutionStack(Stack):
             { "id": 'AwsSolutions-IAM4', "reason": 'Allow to use AWSLambdaBasicExecutionRole service managed role as this is managed by CDK'},
             { "id": 'AwsSolutions-L1', "reason": 'As this is managed by CDK, allowing using the non-latest Lambda runtime.'}
         ], True)
-
-        # Subnet group
-        db_subnet_group = _rds.SubnetGroup(self, f"DBSubnetGroup",
-           vpc = vpc,
-           description = "Aurora subnet group",
-           vpc_subnets = private_subnets,
-           subnet_group_name= "Aurora subnet group"
-        )
-
-        # Creating security group to be used by Lambda function that rotates DB secret
-        secret_rotation_security_group = _ec2.SecurityGroup(self, 'RotateDBSecurityGroup',
-            security_group_name = f"{construct_id}-vectorDB-secret-rotator",
-            vpc = vpc,
-            allow_all_outbound = True,
-            description = "Security group for Lambda function that rotates DB secret",
-        )
-
-        # Creating the database security group
-        db_security_group = _ec2.SecurityGroup(self, "VectorDBSecurityGroup",
-            security_group_name = f"{construct_id}-vectorDB",
-            vpc = vpc,
-            allow_all_outbound = True,
-            description = "Security group for Aurora Serverless PostgreSQL",
-        )
-
-        db_security_group.add_ingress_rule(
-            peer =db_security_group,
-            connection =_ec2.Port(protocol=ec2.Protocol("ALL"), string_representation="ALL"),
-            description="Any in connection from self"
-        )
-        
-        db_security_group.add_ingress_rule(
-            peer =_ec2.Peer.ipv4(vpc.vpc_cidr_block),
-            connection =_ec2.Port(protocol=_ec2.Protocol("TCP"), from_port=5432, to_port=5432, string_representation="tcp5432 PostgreSQL"),
-            description="Postgresql port in from within the VPC"
-        )
-
-        db_security_group.add_ingress_rule(
-          peer= _ec2.Peer.security_group_id(secret_rotation_security_group.security_group_id),
-          connection=_ec2.Port.tcp(5432),
-          description="Allow DB access from Lambda Functions that rotate Secrets"
-        )
-
-        # Create secret for use with Aurora Serverless
-        aurora_cluster_username="clusteradmin"
-        aurora_cluster_secret = _secretsmanager.Secret(self, "AuroraClusterCredentials",
-          secret_name = f"{construct_id}-vectorDB-creds",
-          description = "Aurora Cluster Credentials",
-          generate_secret_string=_secretsmanager.SecretStringGenerator(
-            exclude_characters ="\"@/\\ '",
-            generate_string_key ="password",
-            password_length =30,
-            secret_string_template=json.dumps(
-              {
-                "username": aurora_cluster_username,
-                "engine": "postgres"
-              })),
-        )
-        aurora_cluster_secret.add_rotation_schedule(
-          id="1",
-          automatically_after=Duration.days(30),
-          hosted_rotation=_secretsmanager.HostedRotation.postgre_sql_single_user(
-            security_groups=[secret_rotation_security_group],
-            vpc=vpc,
-            vpc_subnets=private_with_egress_subnets
-          )
-        )
-        self.db_secret_arn = aurora_cluster_secret.secret_full_arn
-        self.db_secret_name = aurora_cluster_secret.secret_name
-        aurora_cluster_credentials = _rds.Credentials.from_secret(aurora_cluster_secret, aurora_cluster_username)
-        
-        # Provisioning the Aurora Serverless database
-        aurora_cluster = _rds.DatabaseCluster(self, f"{construct_id}AuroraDatabase",
-          credentials= aurora_cluster_credentials,
-          iam_authentication=True,
-          engine= _rds.DatabaseClusterEngine.aurora_postgres(version=_rds.AuroraPostgresEngineVersion.VER_15_5),
-          writer=_rds.ClusterInstance.serverless_v2("writer"),
-          readers=[
-            _rds.ClusterInstance.serverless_v2("reader1",  scale_with_writer=True),
-          ],
-          serverless_v2_min_capacity=0.5,
-          serverless_v2_max_capacity=1,
-          default_database_name=database_name,
-          security_groups=[db_security_group],
-          vpc=vpc,
-          subnet_group=db_subnet_group,
-          storage_encrypted=True,
-          deletion_protection=True,
-        )
-        
-        self.db_writer_endpoint = aurora_cluster.cluster_endpoint
-        self.db_reader_endpoint = aurora_cluster.cluster_read_endpoint
-        
-        # Lambda for setting up database
-        db_setup_event_handler = _lambda.Function(self, "DatabaseSetupHandler",
-            function_name=f"{construct_id}-DatabaseSetupHandler",
-            runtime=_lambda.Runtime.PYTHON_3_12,
-            timeout=Duration.minutes(1),
-            code=_lambda.Code.from_asset('./lib/db_setup_lambda',
-                bundling= BundlingOptions(
-                  image= _lambda.Runtime.PYTHON_3_12.bundling_image,
-                  command= [
-                    'bash',
-                    '-c',
-                    'pip install -r requirements.txt -t /asset-output && cp -au . /asset-output',
-                  ],
-                )
-            ),
-            environment = {
-                'DB_WRITER_ENDPOINT': self.db_writer_endpoint.hostname,
-                'DATABASE_NAME': database_name,
-                'VIDEO_TABLE_NAME': video_table_name,
-                'ENTITIES_TABLE_NAME': entities_table_name,
-                'CONTENT_TABLE_NAME': content_table_name,
-                'SECRET_NAME': self.db_secret_name,
-                "EMBEDDING_DIMENSION": str(embedding_dimension)
-            },
-            vpc=vpc,
-            vpc_subnets=private_with_egress_subnets,
-            handler='index.on_event'
-        )
-
-        # Suppress CDK nag rule to allow the use of AWS managed policies/roles AWSLambdaVPCAccessExecutionRole and AWSLambdaBasicExecutionRole
-        NagSuppressions.add_resource_suppressions(db_setup_event_handler, [
-            { "id": 'AwsSolutions-IAM4', "reason": 'Allow the use of AWS managed policies/roles AWSLambdaVPCAccessExecutionRole and AWSLambdaBasicExecutionRole'},
-        ], True)
-        
-        # IAM Policy statement for the Lambda function that configures the database
-        statement = iam.PolicyStatement()
-        statement.add_actions("secretsmanager:GetSecretValue")
-        statement.add_resources(aurora_cluster_secret.secret_full_arn)
-        db_setup_event_handler.add_to_role_policy(statement)
- 
- 
-        provider = Provider(self, f'{construct_id}DatabaseSetupProvider', 
-                    on_event_handler=db_setup_event_handler)
-
-        
-        # Suppress cdk_nag rule for using not the latest runtime for non container Lambda, as this is managed by CDK Provider.
-        # Also suppress it for using * in IAM policy and for using managed policy, as this is managed by CDK Provider.
-        NagSuppressions.add_resource_suppressions(provider, [
-            { "id": 'AwsSolutions-L1', "reason": "The Lambda function's runtime is managed by CDK Provider. Solution is to update CDK version."},
-            { "id": 'AwsSolutions-IAM4', "reason": 'The Lambda function is managed by Provider'},
-            { "id": 'AwsSolutions-IAM5', "reason": 'The Lambda function is managed by Provider.'}
-        ], True)
-
-
-        db_setup_custom_resource = CustomResource(
-            scope=self,
-            id='DatabaseSetup',
-            service_token=provider.service_token,
-            removal_policy=RemovalPolicy.DESTROY,
-            resource_type="Custom::DatabaseSetupCustomResource"
-        )
-
-        db_setup_custom_resource.node.add_dependency(aurora_cluster) 
 
         CfnOutput(self, "bucket_name", value=video_bucket_s3.bucket_name)
         CfnOutput(self, "web_portal_url", value=f"https://{branch_name}.{ui_amplify_app.default_domain}")

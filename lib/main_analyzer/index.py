@@ -22,7 +22,7 @@ summary_folder = os.environ["SUMMARY_FOLDER"]
 truncation_for_text = 50
 truncation_for_scene = 50
 
-def handler(event, context):
+def handler(event, context)
     print("received event:")
     print(event)
 
@@ -32,7 +32,7 @@ def handler(event, context):
     transcription_job_name=""
 
     for payload in event:
-        video_s3_path = payload["videoS3Path"]
+        if 'videoS3Path' in payload: video_s3_path = payload["videoS3Path"]
         if 'labelDetectionResult' in payload: labels_job_id = payload['labelDetectionResult']['JobId'] 
         if 'textDetectionResult' in payload: texts_job_id = payload['textDetectionResult']['JobId']
         if 'transcriptionResult' in payload: transcription_job_name = payload['transcriptionResult']["TranscriptionJobName"]
@@ -56,12 +56,7 @@ def handler(event, context):
 
     return {
         'statusCode': 200,
-        #'headers': {
-        #    'Access-Control-Allow-Headers': '*',
-        #    'Access-Control-Allow-Origin': '*',
-        #    'Access-Control-Allow-Methods': 'OPTIONS,POST,GET'
-        #},
-        'body': "Analysis is successful"
+        'body': json.dumps({"main_analyzer": "success"})
     }
 
 def store_summary_result(summary, video_name):
@@ -585,3 +580,16 @@ class VideoAnalyzerSageMaker(VideoAnalyzer):
         response = self.query_endpoint_with_json_payload(encoded_input, endpoint_name, content_type="application/json")
         response = self.parse_response_model(response)[0]
         return response
+
+
+if __name__ == "__main__":
+    # Assuming input is of this structure
+    #{
+    #   "payloads": [{},{}]    
+    #}
+    print("input data")
+    print(os.getenv("INPUT_DATA"))
+    payloads = json.loads(os.getenv("INPUT_DATA"))
+    print("payloads")
+    print(payloads)
+    return handler(payloads, None)

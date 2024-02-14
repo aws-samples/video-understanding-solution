@@ -19,6 +19,7 @@ class Database():
         self.database_name = database_name
         self.video_table_name = video_table_name
         self.entities_table_name = entities_table_name 
+        self.content_table_name = content_table_name 
         self.secret_name = secret_name
         self.embedding_dimension = embedding_dimension
         self.conn = None
@@ -53,21 +54,21 @@ class Database():
 
         # Create videos table and set indexes
         # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
-        cur.execute(f"CREATE TABLE {videos_table_name} (id bigserial PRIMARY KEY, uploaded_at timestamp without time zone NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC'), name VARCHAR(200), summary_embedding vector({str(embedding_dimension)}));")
+        cur.execute(f"CREATE TABLE {self.video_table_name} (name varchar(200) PRIMARY KEY NOT NULL, uploaded_at timestamp without time zone NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC'), summary text, summary_embedding vector({str(embedding_dimension)}));")
         # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
-        cur.execute(f"CREATE INDEX name_index ON {videos_table_name} (name);")
+        cur.execute(f"CREATE INDEX name_index ON {self.video_table_name} (name);")
         # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
-        cur.execute(f"CREATE INDEX uploaded_at_index ON {videos_table_name} (uploaded_at);")
+        cur.execute(f"CREATE INDEX uploaded_at_index ON {self.video_table_name} (uploaded_at);")
         # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
-        cur.execute(f"CREATE INDEX name_and_uploaded_at_index ON {videos_table_name} (name, uploaded_at);")
+        cur.execute(f"CREATE INDEX name_and_uploaded_at_index ON {self.video_table_name} (name, uploaded_at);")
         
         # Create entities table
         # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
-        cur.execute(f"CREATE TABLE {entities_table_name} (id bigserial PRIMARY KEY, name VARCHAR(100), sentiment VARCHAR(20), video_id REFERENCES videos(id);")
+        cur.execute(f"CREATE TABLE {self.entities_table_name} (id bigserial PRIMARY KEY NOT NULL, name VARCHAR(100) NOT NULL, sentiment VARCHAR(20) NOT NULL, video_name varchar(200) NOT NULL REFERENCES {self.video_table_name}(name));")
        
         # Create content table
         # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
-        cur.execute(f"CREATE TABLE {content_table_name} (id bigserial PRIMARY KEY, chunk text, chunk_embedding vector({str(embedding_dimension)}), video_id REFERENCES videos(id);")
+        cur.execute(f"CREATE TABLE {self.content_table_name} (id bigserial PRIMARY KEY NOT NULL, chunk text NOT NULL, chunk_embedding vector({str(embedding_dimension)}), video_name varchar(200) NOT NULL REFERENCES {self.video_table_name}(name));")
 
         self.conn.commit()
         cur.close()
