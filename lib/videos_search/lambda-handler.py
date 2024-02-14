@@ -3,6 +3,7 @@ import boto3
 from sqlalchemy import create_engine, Column, DateTime, String, Text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, mapped_column
+from sqlalchemy.sql import bindparam
 from pgvector.sqlalchemy import Vector
 
 bedrock = boto3.client("bedrock-runtime")
@@ -45,14 +46,17 @@ def handler(event, context):
     # Use SQLAlchemy to search videos with the 3 filters above.
     videos = session.query(Videos.name)
     if video_name_starts_with is not None:
-        videos = videos.filter(Videos.name.like(f"{video_name_starts_with}%"))
+        video_name_starts_with_param = bindparam("name")
+        videos = videos.filter(Videos.name.like(f"{video_name_starts_with_param}%"))
     if uploaded_between is not None:
          # Assume uploaded_between is like 2024-12-03 10:30:11 +08:00|2024-12-07 19:30:11 +08:00
         start, stop = uploaded_between.split("|")
         start = datetime.strptime(start, "%Y-%m-%d %H:%M:%S %z")
         stop = datetime.strptime(stop, "%Y-%m-%d %H:%M:%S %z")
+        start_param = bindparam("start")
+        stop_param = bindparam("stop")
 
-        videos = videos.filter(Videos.uploaded_at.between(start, stop))
+        videos = videos.filter(Videos.uploaded_at.between(start_param, stop_param))
     if about is not None:
         # Get the embedding for the video topic
         body = json.dumps(
@@ -75,8 +79,16 @@ def handler(event, context):
         # nosemgrep: python.aws-lambda.deserialization.tainted-json-aws-lambda.tainted-json-aws-lambda
         about_embedding = json.loads(response.get("body").read())["embedding"]
 
-        videos = videos.order_by(Videos.summary_embedding.l2_distance(about_embedding))
-        
+        summary_embedding_param = bindparam("summary_embedding")
+        videos = videos.order_by(Videos.summary_embedding.l2_distance(summary_embedding_param))
+
+    if video_name_starts_with is not None:
+        videos = videos.params(name=video_name_starts_with)
+    if uploaded_between is not None:
+        videos = videos.params(start=start, stop=stop)
+    if about is not None:
+        videos = videos.params(summary_embedding=about_embedding)
+
     video_names = videos.offset(page*page_size).limit(page_size+1).all()
 
     next_page = None

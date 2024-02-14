@@ -49,7 +49,7 @@ Base = declarative_base()
 Session = sessionmaker(bind=engine)  
 session = Session()
 
-def handler(event, context)
+def handler(event, context):
     print("received event:")
     print(event)
 

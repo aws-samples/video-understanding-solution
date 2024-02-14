@@ -1,9 +1,12 @@
 import json, os
 import boto3
-from sqlalchemy import create_engine, Column, Text, DateTime, String, func
+from sqlalchemy import create_engine, Column, Text, DateTime, String, func, bindparam
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import mapped_column, sessionmaker
+from sqlalchemy.sql import bindparam
 from sqlalchemy.dialects.postgresql import insert as db_insert
+
+
 from pgvector.sqlalchemy import Vector
 
 database_name = os.environ['DATABASE_NAME']
@@ -48,25 +51,28 @@ def handler(event, context):
             'body': json.dumps({"preprocessing": "Unsupported video file extension. Only .mp4, .MP4, .mov, and .MOV are allowed."})
         }
 
-    # Insert new video to database
-    video = Videos(name=video_name, uploaded_at=func.now(tz="UTC"))
+    # Parameterize
+    video_name_param = bindparam('name') 
+    uploaded_at_param = bindparam('uploaded_at')
 
-    upsert = db_insert(Videos).values(
-        name=video.name,
-        uploaded_at=video.uploaded_at
-    ) 
-
-    # On conflict clause 
+    upsert = insert(Videos).values(
+        name=video_name_param,
+        uploaded_at=uploaded_at_param
+    )
+    
     upsert = upsert.on_conflict_do_update(
-        constraint=f"{video_table_name}_pkey",
+        constraint=f"{videos_table_name}_pkey",
         set_={
-            Videos.uploaded_at=video.uploaded_at, 
+            Videos.uploaded_at: uploaded_at_param
         }
     )
 
-    # Execute the upsert
-    session.execute(upsert)
-    session.commit()
+    with session.begin():
+        session.execute(upsert, {
+            "name": video_name,  
+            "uploaded_at": func.now(tz="UTC")
+        })
+        session.commit()
 
     return {
         'statusCode': 200,

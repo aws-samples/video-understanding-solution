@@ -21,7 +21,7 @@ from aws_cdk import (
     aws_cognito as _cognito,
     aws_secretsmanager as _secretsmanager,
     custom_resources as _custom_resources,
-    Duration, CfnOutput, BundlingOptions, RemovalPolicy, CustomResource, Aspects
+    Duration, CfnOutput, BundlingOptions, RemovalPolicy, CustomResource, Aspects, Size
 )
 from constructs import Construct
 from aws_cdk.custom_resources import Provider
@@ -550,7 +550,7 @@ class VideoUnderstandingSolutionStack(Stack):
             id="MainAnalyzerExecutionRole",
             scope=self,
             role_name=f"{construct_id}-main-analyzer-execution",
-            assumed_by=_iam.ServicePrincipal("ecs-tasks.amazonaws.com")
+            assumed_by=_iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
             managed_policies=[
                 #_iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSLambdaBasicExecutionRole"),
                 #_iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSLambdaVPCAccessExecutionRole")
@@ -636,7 +636,7 @@ class VideoUnderstandingSolutionStack(Stack):
         analyzer_container_definition = analyzer_task_definition.add_container("analyzer",
             image=_ecs.ContainerImage.from_docker_image_asset(
                 DockerImageAsset(self, "AnalyzerImageBuild",
-                    directory=f"{BASE_DIR}/lib/main_analyzer/analyzer"
+                    directory=f"{BASE_DIR}/lib/main_analyzer/"
                 )
             ),
             memory_limit_mib=512,
@@ -690,30 +690,28 @@ class VideoUnderstandingSolutionStack(Stack):
             task_definition=analyzer_task_definition,
             assign_public_ip=True,
             launch_target=_sfn_tasks.EcsFargateLaunchTarget(
-                platform_version=_ecs.FargatePlatformVersion.1.4
+                platform_version=_ecs.FargatePlatformVersion.VERSION1_4
             ),
             subnets=private_with_egress_subnets,
             container_overrides=[_sfn_tasks.ContainerOverride(
                 container_definition=analyzer_container_definition,
                 environment=[
-                    _sfn_tasks.TaskEnvironmentVariable(
-                        name="INPUT_DATA", value=_sfn.JsonPath.string_at("$"),
-                        name='DATABASE_NAME', value= database_name,
-                        name='VIDEO_TABLE_NAME', value= video_table_name,
-                        name='ENTITIES_TABLE_NAME', value= entities_table_name,
-                        name='CONTENT_TABLE_NAME', value= content_table_name,
-                        name='SECRET_NAME', value= self.db_secret_name,
-                        name="EMBEDDING_DIMENSION", value=str(embedding_dimension),
-                        name='DB_WRITER_ENDPOINT', value= self.db_writer_endpoint,
-                        name="EMBEDDING_MODEL_ID", value= embedding_model_id,
-                        name="MODEL_ID", value= model_id,
-                        name="BUCKET_NAME", value= video_bucket_s3.bucket_name,
-                        name="RAW_FOLDER", value= raw_folder,
-                        name="VIDEO_SCRIPT_FOLDER", value= video_script_folder,
-                        name="TRANSCRIPTION_FOLDER", value= transcription_folder,
-                        name="ENTITY_SENTIMENT_FOLDER", value= entity_sentiment_folder,
-                        name="SUMMARY_FOLDER", value= summary_folder
-                    )
+                    _sfn_tasks.TaskEnvironmentVariable(name="INPUT_DATA", value=_sfn.JsonPath.string_at("$")),
+                    _sfn_tasks.TaskEnvironmentVariable(name='DATABASE_NAME', value= database_name),
+                    _sfn_tasks.TaskEnvironmentVariable(name='VIDEO_TABLE_NAME', value= video_table_name),
+                    _sfn_tasks.TaskEnvironmentVariable(name='ENTITIES_TABLE_NAME', value= entities_table_name),
+                    _sfn_tasks.TaskEnvironmentVariable(name='CONTENT_TABLE_NAME', value= content_table_name),
+                    _sfn_tasks.TaskEnvironmentVariable(name='SECRET_NAME', value= self.db_secret_name),
+                    _sfn_tasks.TaskEnvironmentVariable(name="EMBEDDING_DIMENSION", value=str(embedding_dimension)),
+                    _sfn_tasks.TaskEnvironmentVariable(name='DB_WRITER_ENDPOINT', value= self.db_writer_endpoint.hostname),
+                    _sfn_tasks.TaskEnvironmentVariable(name="EMBEDDING_MODEL_ID", value= embedding_model_id),
+                    _sfn_tasks.TaskEnvironmentVariable(name="MODEL_ID", value= model_id),
+                    _sfn_tasks.TaskEnvironmentVariable(name="BUCKET_NAME", value= video_bucket_s3.bucket_name),
+                    _sfn_tasks.TaskEnvironmentVariable(name="RAW_FOLDER", value= raw_folder),
+                    _sfn_tasks.TaskEnvironmentVariable(name="VIDEO_SCRIPT_FOLDER", value= video_script_folder),
+                    _sfn_tasks.TaskEnvironmentVariable(name="TRANSCRIPTION_FOLDER", value= transcription_folder),
+                    _sfn_tasks.TaskEnvironmentVariable(name="ENTITY_SENTIMENT_FOLDER", value= entity_sentiment_folder),
+                    _sfn_tasks.TaskEnvironmentVariable(name="SUMMARY_FOLDER", value= summary_folder)
                 ]
             )],
         )
@@ -772,156 +770,6 @@ class VideoUnderstandingSolutionStack(Stack):
             }),
             role=event_bridge_role)
         )
-
-               # Log group for API Gateway REST API
-        rest_access_log_group = logs.LogGroup(self, "RestAPIAccessLogGroup", log_group_name=f"{construct_id}-rest-api")
-
-        # API Gateway REST API
-        rest_api = apigw.RestApi(self, 
-                            'RestAPI', 
-                            rest_api_name=f'{construct_id}RestAPI',
-                            deploy_options=_apigw.StageOptions(
-                                logging_level=_apigw.MethodLoggingLevel.ERROR,
-                                access_log_destination=_apigw.LogGroupLogDestination(rest_access_log_group),
-                                access_log_format=_apigw.AccessLogFormat.clf()
-                            ))
-        
-        self.rest_api = rest_api
-        self.rest_api_url = rest_api.url
-
-        # Suppress CDK rule to allow using AWS managed policy AmazonAPIGatewayPushToCloudWatchLogs
-        NagSuppressions.add_resource_suppressions(rest_api, [
-            { "id": 'AwsSolutions-IAM4', "reason": 'Allow using AWS managed policy AmazonAPIGatewayPushToCloudWatchLogs' },
-        ], True)
-
-        # Add "videos" resource in the API
-        api_resource_videos = rest_api.root.add_resource(
-            videos_api_resource,
-            default_cors_preflight_options=_apigw.CorsOptions(
-                allow_methods=['GET', 'OPTIONS'],
-                allow_origins=_apigw.Cors.ALL_ORIGINS)
-        )
-
-        # Suppress CDK rule to allow OPTIONS be called without auth header
-        NagSuppressions.add_resource_suppressions(api_resource_videos, [
-            { "id": 'AwsSolutions-APIG4', "reason": 'Allow OPTIONS to be called without auth header' },
-        ], True)
-
-        # Role for the main video analysis
-        video_search_role = _iam.Role(
-            id="VideoSearchRole",
-            scope=self,
-            role_name=f"{construct_id}-video-search",
-            assumed_by=_iam.ServicePrincipal("lambda.amazonaws.com"),
-            inline_policies={
-                "VideoSearchPolicy": _iam.PolicyDocument(
-                    statements=[
-                        _iam.PolicyStatement(
-                            actions=["bedrock:InvokeModel"],
-                            resources=[f"arn:aws:bedrock:{aws_region}::foundation-model/*"],
-                            effect=_iam.Effect.ALLOW,
-                        ),
-                    ]
-                )
-            },
-            managed_policies=[
-                _iam.ManagedPolicy.from_aws_managed_policy_name(
-                    "service-role/AWSLambdaBasicExecutionRole",
-                    "service-role/AWSLambdaVPCAccessExecutionRole"
-                )
-            ]
-        )
-
-
-        # Suppress CDK nag rule for using * in IAM policy since for flexibility in choosing Bedrock model.
-        # Suppress CDK nag rule for using managed policy AWSLambdaVPCAccessExecutionRole and AWSLambdaBasicExecutionRole
-        NagSuppressions.add_resource_suppressions(video_search_role, [
-            { "id": 'AwsSolutions-IAM5', "reason": 'Allow  * in the resources string for flexibility in choosing Bedrock model' },
-            { "id": 'AwsSolutions-IAM4', "reason": 'Allow  using managed policy AWSLambdaVPCAccessExecutionRole and AWSLambdaBasicExecutionRole' }
-        ], True)
-
-        # Define the Lambda function for video search
-        videos_search_function = _lambda.Function(self, f'SearchLambda',
-            role=video_search_role,
-            function_name=f"{construct_id}-videos-search",
-            handler='lambda-handler.handler',
-            runtime=_lambda.Runtime.PYTHON_3_12,
-            code=_lambda.Code.from_asset('./lib/videos_search',
-                bundling= BundlingOptions(
-                image= _lambda.Runtime.PYTHON_3_12.bundling_image,
-                command= [
-                    'bash',
-                    '-c',
-                    'pip install -r requirements.txt -t /asset-output && cp -au . /asset-output',
-                ],
-                )
-            ),  
-            vpc=vpc,
-            vpc_subnets=private_with_egress_subnets,
-            timeout=Duration.minutes(2),
-            environment = {
-                    'DB_READER_ENDPOINT': self.db_reader_endpoint.hostname,
-                    'DATABASE_NAME': database_name,
-                    'VIDEO_TABLE_NAME': video_table_name,
-                    'EMBEDDING_MODEL_ID': embedding_model_id,
-                    'EMBEDDING_DIMENSION': embedding_dimension
-            }
-        )
-
-        # Suppress CDK nag rule for using * in IAM policy since for flexibility in choosing Bedrock model and for calling routes in API Gateway WebSocket APIs
-        # Suppress CDK nag rule for using managed policy AWSLambdaVPCAccessExecutionRole and AWSLambdaBasicExecutionRole
-        NagSuppressions.add_resource_suppressions(videos_search_function, [
-            { "id": 'AwsSolutions-IAM5', "reason": 'Allow  * in the resources string for flexibility in choosing Bedrock model' },
-            { "id": 'AwsSolutions-IAM4', "reason": 'Allow  using managed policy AWSLambdaVPCAccessExecutionRole and AWSLambdaBasicExecutionRole' }
-        ], True)
-        
-        # API Gateway - Lambda integration
-        videos_search_function_integration = _apigw.LambdaIntegration(
-            videos_search_function,
-            integration_responses=[
-                _apigw.IntegrationResponse(
-                    status_code="200",
-                    response_parameters={
-                        'method.response.header.Access-Control-Allow-Origin': "'*'"
-                    }
-                )
-            ]
-        )
-
-        # Request validator for the "GET"" method
-        videos_search_request_validator = _apigw.RequestValidator(self, "VideosSearchRequestValidator",
-            rest_api=rest_api,
-            request_validator_name="videos-search-request-validator",
-            validate_request_body=False,
-            validate_request_parameters=True
-        )
-
-        # Cognito auth for the API Gateway REST API
-        auth = _apigw.CognitoUserPoolsAuthorizer(self, "VideosAuthorizer",
-            cognito_user_pools=[user_pool]
-        )
-        
-        # Add "GET" method to the API "item" resource
-        api_resource_videos.add_method(
-            'GET', videos_search_function_integration,
-            authorization_type=_apigw.AuthorizationType.COGNITO,
-            method_responses=[
-                _apigw.MethodResponse(
-                    status_code="200",
-                    response_parameters={
-                        'method.response.header.Access-Control-Allow-Origin': True
-                    }
-                )
-            ],
-            request_parameters={
-                "method.request.querystring.page": True,
-                "method.request.querystring.video_name_starts_with": False,
-                "method.request.querystring.uploaded_between": False,
-                "method.request.querystring.about": False,
-            },
-            request_validator=videos_search_request_validator
-        )
-
         # Cognito User Pool
         user_pool = _cognito.UserPool(self, "UserPool",
             user_pool_name="video-understanding-user-pool",
@@ -1028,6 +876,154 @@ class VideoUnderstandingSolutionStack(Stack):
                     identity_provider= f"cognito-idp.{aws_region}.amazonaws.com/{user_pool.user_pool_id}:{user_pool_client.user_pool_client_id}",
                 ),
             },
+        )
+
+        # Log group for API Gateway REST API
+        rest_access_log_group = _logs.LogGroup(self, "RestAPIAccessLogGroup", log_group_name=f"{construct_id}-rest-api")
+
+        # API Gateway REST API
+        rest_api = _apigw.RestApi(self, 
+                            'RestAPI', 
+                            rest_api_name=f'{construct_id}RestAPI',
+                            deploy_options=_apigw.StageOptions(
+                                logging_level=_apigw.MethodLoggingLevel.ERROR,
+                                access_log_destination=_apigw.LogGroupLogDestination(rest_access_log_group),
+                                access_log_format=_apigw.AccessLogFormat.clf()
+                            ))
+        
+        self.rest_api = rest_api
+        self.rest_api_url = rest_api.url
+
+        # Suppress CDK rule to allow using AWS managed policy AmazonAPIGatewayPushToCloudWatchLogs
+        NagSuppressions.add_resource_suppressions(rest_api, [
+            { "id": 'AwsSolutions-IAM4', "reason": 'Allow using AWS managed policy AmazonAPIGatewayPushToCloudWatchLogs' },
+        ], True)
+
+        # Add "videos" resource in the API
+        api_resource_videos = rest_api.root.add_resource(
+            videos_api_resource,
+            default_cors_preflight_options=_apigw.CorsOptions(
+                allow_methods=['GET', 'OPTIONS'],
+                allow_origins=_apigw.Cors.ALL_ORIGINS)
+        )
+
+        # Suppress CDK rule to allow OPTIONS be called without auth header
+        NagSuppressions.add_resource_suppressions(api_resource_videos, [
+            { "id": 'AwsSolutions-APIG4', "reason": 'Allow OPTIONS to be called without auth header' },
+        ], True)
+
+        # Role for the main video analysis
+        video_search_role = _iam.Role(
+            id="VideoSearchRole",
+            scope=self,
+            role_name=f"{construct_id}-video-search",
+            assumed_by=_iam.ServicePrincipal("lambda.amazonaws.com"),
+            inline_policies={
+                "VideoSearchPolicy": _iam.PolicyDocument(
+                    statements=[
+                        _iam.PolicyStatement(
+                            actions=["bedrock:InvokeModel"],
+                            resources=[f"arn:aws:bedrock:{aws_region}::foundation-model/*"],
+                            effect=_iam.Effect.ALLOW,
+                        ),
+                    ]
+                )
+            },
+            managed_policies=[
+                _iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSLambdaBasicExecutionRole"),
+                _iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSLambdaVPCAccessExecutionRole")
+            ]
+        )
+
+
+        # Suppress CDK nag rule for using * in IAM policy since for flexibility in choosing Bedrock model.
+        # Suppress CDK nag rule for using managed policy AWSLambdaVPCAccessExecutionRole and AWSLambdaBasicExecutionRole
+        NagSuppressions.add_resource_suppressions(video_search_role, [
+            { "id": 'AwsSolutions-IAM5', "reason": 'Allow  * in the resources string for flexibility in choosing Bedrock model' },
+            { "id": 'AwsSolutions-IAM4', "reason": 'Allow  using managed policy AWSLambdaVPCAccessExecutionRole and AWSLambdaBasicExecutionRole' }
+        ], True)
+
+        # Define the Lambda function for video search
+        videos_search_function = _lambda.Function(self, f'SearchLambda',
+            role=video_search_role,
+            function_name=f"{construct_id}-videos-search",
+            handler='lambda-handler.handler',
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            code=_lambda.Code.from_asset('./lib/videos_search',
+                bundling= BundlingOptions(
+                image= _lambda.Runtime.PYTHON_3_12.bundling_image,
+                command= [
+                    'bash',
+                    '-c',
+                    'pip install -r requirements.txt -t /asset-output && cp -au . /asset-output',
+                ],
+                )
+            ),  
+            vpc=vpc,
+            vpc_subnets=private_with_egress_subnets,
+            timeout=Duration.minutes(2),
+            environment = {
+                    'DB_READER_ENDPOINT': self.db_reader_endpoint.hostname,
+                    'DATABASE_NAME': database_name,
+                    'VIDEO_TABLE_NAME': video_table_name,
+                    'EMBEDDING_MODEL_ID': embedding_model_id,
+                    'EMBEDDING_DIMENSION': str(embedding_dimension)
+            }
+        )
+
+        # Suppress CDK nag rule for using * in IAM policy since for flexibility in choosing Bedrock model and for calling routes in API Gateway WebSocket APIs
+        # Suppress CDK nag rule for using managed policy AWSLambdaVPCAccessExecutionRole and AWSLambdaBasicExecutionRole
+        NagSuppressions.add_resource_suppressions(videos_search_function, [
+            { "id": 'AwsSolutions-IAM5', "reason": 'Allow  * in the resources string for flexibility in choosing Bedrock model' },
+            { "id": 'AwsSolutions-IAM4', "reason": 'Allow  using managed policy AWSLambdaVPCAccessExecutionRole and AWSLambdaBasicExecutionRole' }
+        ], True)
+        
+        # API Gateway - Lambda integration
+        videos_search_function_integration = _apigw.LambdaIntegration(
+            videos_search_function,
+            integration_responses=[
+                _apigw.IntegrationResponse(
+                    status_code="200",
+                    response_parameters={
+                        'method.response.header.Access-Control-Allow-Origin': "'*'"
+                    }
+                )
+            ]
+        )
+
+        # Request validator for the "GET"" method
+        videos_search_request_validator = _apigw.RequestValidator(self, "VideosSearchRequestValidator",
+            rest_api=rest_api,
+            request_validator_name="videos-search-request-validator",
+            validate_request_body=False,
+            validate_request_parameters=True
+        )
+
+        # Cognito auth for the API Gateway REST API
+        auth = _apigw.CognitoUserPoolsAuthorizer(self, "VideosAuthorizer",
+            cognito_user_pools=[user_pool]
+        )
+        
+        # Add "GET" method to the API "item" resource
+        api_resource_videos.add_method(
+            'GET', videos_search_function_integration,
+            authorizer=auth,
+            authorization_type=_apigw.AuthorizationType.COGNITO,
+            method_responses=[
+                _apigw.MethodResponse(
+                    status_code="200",
+                    response_parameters={
+                        'method.response.header.Access-Control-Allow-Origin': True
+                    }
+                )
+            ],
+            request_parameters={
+                "method.request.querystring.page": True,
+                "method.request.querystring.video_name_starts_with": False,
+                "method.request.querystring.uploaded_between": False,
+                "method.request.querystring.about": False,
+            },
+            request_validator=videos_search_request_validator
         )
 
         # CodeCommit repo

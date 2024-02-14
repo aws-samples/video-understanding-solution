@@ -48,7 +48,7 @@ class Database():
         cur = self.conn.cursor()
 
         # Create pgVector extension
-        cur.execute(f"CREATE EXTENSION IF NOT EXISTS vector;")
+        cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
 
         # For the statements below, semgrep rule for flagging formatted query is disabled as this Lambda is to be invoked in deployment phase by CloudFormation, not user facing.
 
