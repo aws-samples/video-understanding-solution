@@ -1,4 +1,4 @@
-import os, json
+import os, json, time
 from aws_cdk import (
     # Duration,
     Stack,
@@ -302,7 +302,7 @@ class VideoUnderstandingSolutionStack(Stack):
         preprocessing_lambda_role = _iam.Role(
             id="PreprocessingLambdaRole",
             scope=self,
-            role_name=f"{construct_id}-preprocessing-lambda",
+            role_name=f"{construct_id}-{aws_region}-preprocessing-lambda",
             assumed_by=_iam.ServicePrincipal("lambda.amazonaws.com"),
             inline_policies={
                 "PeprocessingLambdaPolicy": _iam.PolicyDocument(
@@ -358,6 +358,7 @@ class VideoUnderstandingSolutionStack(Stack):
 
         preprocessing_task = _sfn_tasks.LambdaInvoke(self, "CallPreprocessingLambda",
             lambda_function=preprocessing_lambda,
+            result_path="$.preprocessingResult",
         )
 
         # Step function task to start the Rekognition label detection task to detect visual scenes
@@ -547,22 +548,28 @@ class VideoUnderstandingSolutionStack(Stack):
 
         # Role for the main video analysis ECS task execution
         main_analyzer_execution_role = _iam.Role(
-            id="MainAnalyzerExecutionRole",
+            id="AnalyzerExecutionRole",
             scope=self,
-            role_name=f"{construct_id}-main-analyzer-execution",
+            role_name=f"{construct_id}-{aws_region}-main-analyzer-execution",
             assumed_by=_iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
-            managed_policies=[
-                #_iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSLambdaBasicExecutionRole"),
-                #_iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSLambdaVPCAccessExecutionRole")
-                _iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AmazonECSTaskExecutionRolePolicy")
-            ],
+            inline_policies={
+                "AllowECRAndLogsAccessPolicy": _iam.PolicyDocument(
+                    statements=[
+                        _iam.PolicyStatement(
+                            actions=["ecr:GetAuthorizationToken", "ecr:BatchCheckLayerAvailability", "ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage", "logs:CreateLogStream", "logs:PutLogEvents"],
+                            resources=["*"],
+                            effect=_iam.Effect.ALLOW,
+                        ),
+                    ]
+                )
+            },
         )
 
         # Role for the main video analysis
         main_analyzer_role = _iam.Role(
             id="MainAnalyzerRole",
             scope=self,
-            role_name=f"{construct_id}-main-analyzer",
+            role_name=f"{construct_id}-{aws_region}-main-analyzer",
             assumed_by=_iam.ServicePrincipal("ecs-tasks.amazonaws.com"), #_iam.ServicePrincipal("lambda.amazonaws.com"),
             inline_policies={
                 "MainAnalyzerPolicy": _iam.PolicyDocument(
@@ -601,15 +608,20 @@ class VideoUnderstandingSolutionStack(Stack):
                             ],
                             effect=_iam.Effect.ALLOW,
                         ),
+                        _iam.PolicyStatement(
+                            actions=["secretsmanager:GetSecretValue"],
+                            resources=[aurora_cluster_secret.secret_full_arn],
+                            effect=_iam.Effect.ALLOW,
+                        ),
                     ]
                 )
             },
         )
 
 
-        # Suppress cdk_nag it for using * in IAM policy as reasonable in the resources and for using AWSLambdaBasicExecutionRole and AWSLambdaVPCAccessExecutionRole managed role by AWS.
+        # Suppress cdk_nag it for using * in IAM policy as reasonable in the resources and for using AmazonECSTaskExecutionRolePolicy managed role by AWS.
         NagSuppressions.add_resource_suppressions(main_analyzer_role, [
-            { "id": 'AwsSolutions-IAM4', "reason": 'Allow to use AmazonECSTaskExecutionRolePolicy AWS managed service role'},
+            #{ "id": 'AwsSolutions-IAM4', "reason": 'Allow to use AmazonECSTaskExecutionRolePolicy AWS managed service role'},
             { "id": 'AwsSolutions-IAM5', "reason": 'Allow to use * for Rekognition read APIs which resources have to be *, and to use <arn>/* for Transcribe GetTranscriptionJob as the job name can vary'}
         ], True)
 
@@ -619,7 +631,8 @@ class VideoUnderstandingSolutionStack(Stack):
             "ECSCluster",
             cluster_name=f"{construct_id}-ecs-cluster",
             enable_fargate_capacity_providers=True,
-            vpc=vpc
+            vpc=vpc,
+            container_insights=True
         )
 
         # Task definition for main analyzer
@@ -696,7 +709,10 @@ class VideoUnderstandingSolutionStack(Stack):
             container_overrides=[_sfn_tasks.ContainerOverride(
                 container_definition=analyzer_container_definition,
                 environment=[
-                    _sfn_tasks.TaskEnvironmentVariable(name="INPUT_DATA", value=_sfn.JsonPath.string_at("$")),
+                    _sfn_tasks.TaskEnvironmentVariable(name="VIDEO_S3_PATH", value=_sfn.JsonPath.string_at("$[0].videoS3Path")),
+                    _sfn_tasks.TaskEnvironmentVariable(name="LABEL_DETECTION_JOB_ID", value=_sfn.JsonPath.string_at("$[0].labelDetectionResult.JobId")),
+                    _sfn_tasks.TaskEnvironmentVariable(name="TEXT_DETECTION_JOB_ID", value=_sfn.JsonPath.string_at("$[1].textDetectionResult.JobId")),
+                    _sfn_tasks.TaskEnvironmentVariable(name="TRANSCRIPTION_JOB_NAME", value=_sfn.JsonPath.string_at("$[2].transcriptionResult.TranscriptionJobName")),
                     _sfn_tasks.TaskEnvironmentVariable(name='DATABASE_NAME', value= database_name),
                     _sfn_tasks.TaskEnvironmentVariable(name='VIDEO_TABLE_NAME', value= video_table_name),
                     _sfn_tasks.TaskEnvironmentVariable(name='ENTITIES_TABLE_NAME', value= entities_table_name),
@@ -741,6 +757,7 @@ class VideoUnderstandingSolutionStack(Stack):
         
         # IAM Role for EventBridge to call Step Function
         event_bridge_role = _iam.Role(self, "EventBridgeRole",
+            role_name=f"{construct_id}-{aws_region}-event-bridge",
             assumed_by=_iam.ServicePrincipal("events.amazonaws.com"),
             inline_policies={
                 "EventBridgeTriggersStepFunctionPolicy": _iam.PolicyDocument(
@@ -820,6 +837,7 @@ class VideoUnderstandingSolutionStack(Stack):
 
         # Cognito Role
         auth_role = _iam.Role(self, 'CognitoAuthRole',
+            role_name=f"{construct_id}-{aws_region}-cognito-auth",
             assumed_by= _iam.FederatedPrincipal(
                 'cognito-identity.amazonaws.com',
                 {
@@ -851,7 +869,7 @@ class VideoUnderstandingSolutionStack(Stack):
                             ]
                         ),
                         _iam.PolicyStatement(
-                            actions=["s3:PutObject"], 
+                            actions=["s3:PutObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"], 
                             resources=[
                                 f"arn:aws:s3:::{video_bucket_s3.bucket_name}/{raw_folder}/*",
                             ]
@@ -908,15 +926,17 @@ class VideoUnderstandingSolutionStack(Stack):
         )
 
         # Suppress CDK rule to allow OPTIONS be called without auth header
+        # Suppress CDK rule to allow OPTIONS be called without auth header
         NagSuppressions.add_resource_suppressions(api_resource_videos, [
-            { "id": 'AwsSolutions-APIG4', "reason": 'Allow OPTIONS to be called without auth header' },
+            { "id": 'AwsSolutions-COG4', "reason": 'Allow OPTIONS to be called without auth header' },
+            { "id": 'AwsSolutions-APIG4', "reason": 'Allow OPTIONS to be called without auth header' }
         ], True)
 
         # Role for the main video analysis
         video_search_role = _iam.Role(
             id="VideoSearchRole",
             scope=self,
-            role_name=f"{construct_id}-video-search",
+            role_name=f"{construct_id}-{aws_region}-video-search",
             assumed_by=_iam.ServicePrincipal("lambda.amazonaws.com"),
             inline_policies={
                 "VideoSearchPolicy": _iam.PolicyDocument(
@@ -964,6 +984,7 @@ class VideoUnderstandingSolutionStack(Stack):
             timeout=Duration.minutes(2),
             environment = {
                     'DB_READER_ENDPOINT': self.db_reader_endpoint.hostname,
+                    'SECRET_NAME': self.db_secret_name,
                     'DATABASE_NAME': database_name,
                     'VIDEO_TABLE_NAME': video_table_name,
                     'EMBEDDING_MODEL_ID': embedding_model_id,
@@ -1004,7 +1025,7 @@ class VideoUnderstandingSolutionStack(Stack):
             cognito_user_pools=[user_pool]
         )
         
-        # Add "GET" method to the API "item" resource
+        # Add "GET" method to the API "videos" resource
         api_resource_videos.add_method(
             'GET', videos_search_function_integration,
             authorizer=auth,
@@ -1026,17 +1047,47 @@ class VideoUnderstandingSolutionStack(Stack):
             request_validator=videos_search_request_validator
         )
 
+        """
+        # API Gateway WebSocket
+        ws_api = _apigw2.CfnApi(self, "WebSocketAPI",
+            name=f"{construct_id}-ws-api",
+            protocol_type="WEBSOCKET",
+            route_selection_expression="$request.body.action"
+        )
+        self.ws_api = ws_api
+        self.ws_api_endpoint = ws_api.attr_api_endpoint
+        
+        connect_route_key = "$connect"
+        
+        ws_connect_route = _apigw2.CfnRoute(self, "ConnectRoute",
+            api_id=ws_api.attr_api_id,
+            route_key=connect_route_key,
+            authorization_type="AWS_IAM",
+            operation_name="ConnectRoute"
+        )
+        """
+
+
+
         # CodeCommit repo
+        repo_name = f"video-understanding-{int(time.time())}"
         branch_name = "main"
+        webui_path = f"{BASE_DIR}/webui/"
+        webui_zip_file_name = [i for i in os.listdir(webui_path) if os.path.isfile(os.path.join(webui_path,i)) and i.startswith("ui_repo")][0]
+        print(webui_zip_file_name)
         repo = _codecommit.Repository(
           self,
           "VideoUnderstandingRepo",
-          repository_name="video-understanding-repo",
+          repository_name=repo_name,
           description="CodeCommit repository for the video understanding solution's UI",
+          #code=_codecommit.Code.from_directory(
+          #    directory=webui_path,
+          #    branch=branch_name,
+          #)
           code=_codecommit.Code.from_zip_file(
-                f"{BASE_DIR}/webui/ui_repo.zip",
+                f"{webui_path}{webui_zip_file_name}",
                 branch=branch_name,
-            ),
+          ),
         )
 
         # Suppress cdk_nag rule to allow <Arn>* in the IAM policy as the video file names can vary
@@ -1070,7 +1121,7 @@ class VideoUnderstandingSolutionStack(Stack):
         cognito_user_setup_role = _iam.Role(
             id="CognitoUserSetupLambdaCR",
             scope=self,
-            role_name=f"CognitoUserSetupLambdaCRRole",
+            role_name=f"{construct_id}-{aws_region}-cognito-setup",
             assumed_by=_iam.ServicePrincipal("lambda.amazonaws.com"),
             inline_policies={
                 "CognitoUserSetupPolicy": _iam.PolicyDocument(
@@ -1185,6 +1236,16 @@ class VideoUnderstandingSolutionStack(Stack):
         NagSuppressions.add_resource_suppressions_by_path(self, "/VideoUnderstandingStack/AWS679f53fac002430cb0da5b7982bd2287", [
             { "id": 'AwsSolutions-IAM4', "reason": 'Allow to use AWSLambdaBasicExecutionRole service managed role as this is managed by CDK'},
             { "id": 'AwsSolutions-L1', "reason": 'As this is managed by CDK, allowing using the non-latest Lambda runtime.'}
+        ], True)
+
+        # Suppress CDK rule on request validator. This resource contains GET request which does not have payload. Query string validator is in place. However, the rule is activated if payload validator is not there (link to implementation https://github.com/cdklabs/cdk-nag/blob/main/src/rules/apigw/APIGWRequestValidation.ts). Hence disabling the rule.
+        NagSuppressions.add_resource_suppressions_by_path(self, "/VideoUnderstandingStack/RestAPI/Resource", [
+            { "id": 'AwsSolutions-APIG2', "reason": 'This resource contains GET request which does not have payload. Query string validator is in place. However, the rule is activated if payload validator is not there (link to implementation https://github.com/cdklabs/cdk-nag/blob/main/src/rules/apigw/APIGWRequestValidation.ts). Hence disabling the rule.'},
+        ], True)
+
+        # Suppress cdk_nag rule to allow using * in IAM policy for ECR and logs access
+        NagSuppressions.add_resource_suppressions_by_path(self, "/VideoUnderstandingStack/AnalyzerExecutionRole/Resource", [
+            { "id": 'AwsSolutions-IAM5', "reason": 'Allow to use * for ECR and logs access'}
         ], True)
 
         CfnOutput(self, "bucket_name", value=video_bucket_s3.bucket_name)

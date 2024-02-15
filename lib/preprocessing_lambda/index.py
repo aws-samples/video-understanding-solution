@@ -1,6 +1,7 @@
 import json, os
 import boto3
-from sqlalchemy import create_engine, Column, Text, DateTime, String, func, bindparam
+from datetime import datetime, timezone
+from sqlalchemy import create_engine, Column, Text, DateTime, String, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import mapped_column, sessionmaker
 from sqlalchemy.sql import bindparam
@@ -16,12 +17,14 @@ writer_endpoint = os.environ['DB_WRITER_ENDPOINT']
 embedding_dimension = os.environ['EMBEDDING_DIMENSION']
 
 secrets_manager = boto3.client('secretsmanager')
-credentials = json.loads(secrets_manager.get_secret_value(SecretId=self.secret_name)["SecretString"])
+credentials = json.loads(secrets_manager.get_secret_value(SecretId=secret_name)["SecretString"])
 username = credentials["username"]
 password = credentials["password"]
 
 engine = create_engine(f'postgresql://{username}:{password}@{writer_endpoint}:5432/{database_name}')
 Base = declarative_base()
+
+print("1")
 
 class Videos(Base):
     __tablename__ = video_table_name
@@ -38,9 +41,9 @@ def handler(event, context):
     print("received event:")
     print(event)
 
-    video_s3_path = ""
-    for payload in event:
-        if 'videoS3Path' in payload: video_s3_path = payload["videoS3Path"]
+    video_s3_path = event["videoS3Path"]
+    
+    print(video_s3_path)
 
     video_name = os.path.basename(video_s3_path)
 
@@ -50,31 +53,37 @@ def handler(event, context):
             'statusCode': 400,
             'body': json.dumps({"preprocessing": "Unsupported video file extension. Only .mp4, .MP4, .mov, and .MOV are allowed."})
         }
+    
+    print("2")
 
     # Parameterize
     video_name_param = bindparam('name') 
     uploaded_at_param = bindparam('uploaded_at')
 
-    upsert = insert(Videos).values(
+    upsert = db_insert(Videos).values(
         name=video_name_param,
         uploaded_at=uploaded_at_param
     )
-    
+
     upsert = upsert.on_conflict_do_update(
-        constraint=f"{videos_table_name}_pkey",
+        constraint=f"{video_table_name}_pkey",
         set_={
             Videos.uploaded_at: uploaded_at_param
         }
     )
 
+    print("3")
+
     with session.begin():
+        date_now = datetime.now(timezone.utc)
         session.execute(upsert, {
             "name": video_name,  
-            "uploaded_at": func.now(tz="UTC")
+            "uploaded_at": date_now
         })
         session.commit()
+        print("4")
 
     return {
         'statusCode': 200,
-        'body': json.dumps({"preprocessing": "success"})
+        'body': {"preprocessing": "success"}
     }

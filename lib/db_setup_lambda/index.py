@@ -75,9 +75,7 @@ class Database():
         return True
     
 db = Database(writer=writer_endpoint, database_name = database_name, embedding_dimension = embedding_dimension)
-    
 def on_event(event, context):
-    print(event)
     request_type = event['RequestType'].lower()
     if request_type == 'create':
         return on_create(event)

@@ -1,5 +1,6 @@
 import os, json
 import boto3
+import urllib.parse
 from sqlalchemy import create_engine, Column, DateTime, String, Text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, mapped_column
@@ -11,12 +12,13 @@ secrets_manager = boto3.client('secretsmanager')
 
 reader_endpoint = os.environ['DB_READER_ENDPOINT']
 database_name = os.environ['DATABASE_NAME']
+secret_name = os.environ['SECRET_NAME']
 embedding_model_id = os.environ["EMBEDDING_MODEL_ID"]
 embedding_dimension = os.environ['EMBEDDING_DIMENSION']
 
 page_size = 25
 
-credentials = json.loads(secrets_manager.get_secret_value(SecretId='AuroraClusterCredentials')["SecretString"])
+credentials = json.loads(secrets_manager.get_secret_value(SecretId=secret_name)["SecretString"])
 username = credentials["username"]
 password = credentials["password"]
 
@@ -39,9 +41,9 @@ def handler(event, context):
     params = event["queryStringParameters"]
     
     page = int(params["page"])
-    video_name_starts_with = params["video_name_starts_with"] if "video_name_starts_with" in params else None
-    uploaded_between= params["uploaded_between"] if "uploaded_between" in params else None
-    about = params["about"] if "about" in params else None
+    video_name_starts_with = urllib.parse.unquote(params["video_name_starts_with"]) if "video_name_starts_with" in params else None
+    uploaded_between= urllib.parse.unquote(params["uploaded_between"]) if "uploaded_between" in params else None
+    about = urllib.parse.unquote(params["about"]) if "about" in params else None
    
     # Use SQLAlchemy to search videos with the 3 filters above.
     videos = session.query(Videos.name)

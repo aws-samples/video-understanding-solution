@@ -47,6 +47,7 @@ function App({ signOut, user }: WithAuthenticatorProps) {
       }),
     });
     const credentials = await cognitoidentity.config.credentials();
+    console.log(credentials)
 
     return credentials;
   };

@@ -1,5 +1,10 @@
 import React, { Component, useState } from "react";
-import { PutObjectCommand } from "@aws-sdk/client-s3";
+import { CreateMultipartUploadCommand,
+  UploadPartCommand,
+  CompleteMultipartUploadCommand,
+  AbortMultipartUploadCommand,
+  PutObjectCommand,
+} from "@aws-sdk/client-s3";
 
 import Form from "react-bootstrap/Form";
 import InputGroup from 'react-bootstrap/InputGroup';
@@ -35,17 +40,83 @@ export class VideoUpload extends Component {
     });
 
     for (let i = 0; i < this.state.selectedVideoFiles.length; i++) {
-      const command = new PutObjectCommand({
-        Bucket: this.bucketName,
-        Key: `${this.rawFolder}/${this.state.selectedVideoFiles[i].name}`,
-        Body: this.state.selectedVideoFiles[i],
-      });
-  
-      // Upload file  
-      try { 
-        await this.s3Client.send(command);
-      } catch (error) {
-        console.log("Unexpected error: " + error)
+      const fileSize = this.state.selectedVideoFiles[i].fileSize
+      if(fileSize >=25e6){ // User Multipart upload
+        let uploadId;
+        try {
+          const multipartUpload = await this.s3Client.send(
+            new CreateMultipartUploadCommand({
+              Bucket: this.bucketName,
+              Key: `${this.rawFolder}/${this.state.selectedVideoFiles[i].name}`,
+            }),
+          );
+
+          uploadId = multipartUpload.UploadId;
+
+          const uploadPromises = [];
+          // Multipart uploads require a minimum size of 5 MB per part.
+          const partSize = Math.ceil(fileSize / 5e6);
+
+          // Upload each part.
+          for (let i = 0; i < 5; i++) {
+            const start = i * partSize;
+            const end = start + partSize;
+            uploadPromises.push(
+              this.s3Client
+                .send(
+                  new UploadPartCommand({
+                    Bucket: this.bucketName,
+                    Key: `${this.rawFolder}/${this.state.selectedVideoFiles[i].name}`,
+                    UploadId: uploadId,
+                    Body: this.state.selectedVideoFiles[i].subarray(start, end),
+                    PartNumber: i + 1,
+                  }),
+                )
+            );
+          }
+
+          const uploadResults = await Promise.all(uploadPromises);
+
+          return await this.s3Client.send(
+            new CompleteMultipartUploadCommand({
+              Bucket: this.bucketName,
+              Key: `${this.rawFolder}/${this.state.selectedVideoFiles[i].name}`,
+              UploadId: uploadId,
+              MultipartUpload: {
+                Parts: uploadResults.map(({ ETag }, i) => ({
+                  ETag,
+                  PartNumber: i + 1,
+                })),
+              },
+            }),
+          );
+        } catch (err) {
+          console.error(err);
+
+          if (uploadId) {
+            const abortCommand = new AbortMultipartUploadCommand({
+              Bucket: this.bucketName,
+              Key: `${this.rawFolder}/${this.state.selectedVideoFiles[i].name}`,
+              UploadId: uploadId,
+            });
+
+            await this.s3Client.send(abortCommand);
+          }
+        }
+
+      }else{ // Use simple upload
+        const command = new PutObjectCommand({
+          Bucket: this.bucketName,
+          Key: `${this.rawFolder}/${this.state.selectedVideoFiles[i].name}`,
+          Body: this.state.selectedVideoFiles[i],
+        });
+    
+        // Upload file  
+        try { 
+          await this.s3Client.send(command);
+        } catch (error) {
+          console.err(error)
+        }
       }
     }
 

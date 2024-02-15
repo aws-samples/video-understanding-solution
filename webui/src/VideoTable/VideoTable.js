@@ -62,13 +62,13 @@ export class VideoTable extends Component {
     // Construct filter
     var params = `?page=${page.toString()}&`
     if(this.state.searchByNameText != ""){
-      params += `video_name_starts_with=${this.state.searchByNameText}&`
+      params += `video_name_starts_with=${encodeURI(this.state.searchByNameText)}&`
     }
     if(this.state.searchByDateText != ""){
-      params += `uploaded_between=${this.state.searchByDateText}&`
+      params += `uploaded_between=${encodeURI(this.state.searchByDateText)}&`
     }
     if(this.state.searchByAboutText != ""){
-      params += `about=${this.state.searchByAboutText}`
+      params += `about=${encodeURI(this.state.searchByAboutText)}`
     }
 
     // Call API Gateway to fetch the video names
@@ -121,7 +121,6 @@ export class VideoTable extends Component {
     if(!pageFound){
       pages[page] = {
         displayName: (page + 1).toString(),
-        token: token,
         active: true,
         index: page
       }
@@ -567,7 +566,7 @@ export class VideoTable extends Component {
                   endDate={this.showLocalEndDate()}
                   selectsRange={true}
                   isClearable={true}
-                  showIcon={True}
+                  showIcon={true}
                   placeholderText="Uploaded between . . ."
                 />
              </InputGroup>

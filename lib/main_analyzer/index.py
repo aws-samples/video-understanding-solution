@@ -2,11 +2,9 @@ import os, time, json, copy, math, re
 from abc import ABC, abstractmethod
 import boto3
 from botocore.config import Config
-from sqlalchemy import create_engine, Column, DateTime, String, Text, Integer, func, ForeignKey
+from sqlalchemy import create_engine, Column, DateTime, String, Text, Integer, func, ForeignKey, update
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import mapped_column, sessionmaker
-from sqlalchemy.dialects.postgresql import insert as db_insert
-from sqlalchemy.dialects.postgresql import updatet as db_update
 from pgvector.sqlalchemy import Vector
 
 truncation_for_text = 50
@@ -39,7 +37,12 @@ content_table_name = os.environ['CONTENT_TABLE_NAME']
 secret_name = os.environ['SECRET_NAME']
 writer_endpoint = os.environ['DB_WRITER_ENDPOINT']
 
-credentials = json.loads(secrets_manager.get_secret_value(SecretId=self.secret_name)["SecretString"])
+video_s3_path = os.environ['VIDEO_S3_PATH']
+labels_job_id = os.environ['LABEL_DETECTION_JOB_ID']
+texts_job_id = os.environ['TEXT_DETECTION_JOB_ID']
+transcription_job_name = os.environ['TRANSCRIPTION_JOB_NAME']
+
+credentials = json.loads(secrets_manager.get_secret_value(SecretId=secret_name)["SecretString"])
 username = credentials["username"]
 password = credentials["password"]
 
@@ -49,34 +52,31 @@ Base = declarative_base()
 Session = sessionmaker(bind=engine)  
 session = Session()
 
-def handler(event, context):
-    print("received event:")
-    print(event)
+print("1")
 
-    video_s3_path = ""
-    labels_job_id = ""
-    texts_job_id=""
-    transcription_job_name=""
-
-    for payload in event:
-        if 'videoS3Path' in payload: video_s3_path = payload["videoS3Path"]
-        if 'labelDetectionResult' in payload: labels_job_id = payload['labelDetectionResult']['JobId'] 
-        if 'textDetectionResult' in payload: texts_job_id = payload['textDetectionResult']['JobId']
-        if 'transcriptionResult' in payload: transcription_job_name = payload['transcriptionResult']["TranscriptionJobName"]
+def handler():
+    print("handler called")
 
     video_name = os.path.basename(video_s3_path)
-    video_transcript_s3_path = f"{transcription_folder}/{video_name}.txt"
+    video_path= '/'.join(video_s3_path.split('/')[1:])
+
+    video_transcript_s3_path = f"{transcription_folder}/{video_path}.txt"
 
     try:
         wait_for_rekognition_label_detection(labels_job_id=labels_job_id, sort_by='TIMESTAMP')
+        print("waiting rekognition visual done")
         wait_for_rekognition_text_detection(texts_job_id=texts_job_id)
+        print("waiting rekognition text done")
         wait_for_transcription_job(transcription_job_name=transcription_job_name)
-
-        response = analyze_video(labels_job_id=labels_job_id, texts_job_id=texts_job_id, video_name=video_name, video_transcript_s3_path=video_transcript_s3_path)
-
-        store_summary_result(summary=response['summary'], video_name=video_name)
-        store_sentiment_result(sentiment=response['sentiment'], video_name=video_name)
-        store_video_script_result(video_script=response['video_script'], video_name=video_name)
+        print("waiting done")
+        response = analyze_video(labels_job_id=labels_job_id, texts_job_id=texts_job_id, video_transcript_s3_path=video_transcript_s3_path)
+        print("analyzing done")
+        store_summary_result(summary=response['summary'], video_name=video_name, video_path=video_path)
+        print("summary store done")
+        store_sentiment_result(sentiment_string=response['sentiment'], video_name=video_name, video_path=video_path)
+        print("sentiment store done")
+        store_video_script_result(video_script=response['video_script'], video_name=video_name, video_path=video_path)
+        print("chunk store done")
     except Exception as err:
         print(f"Unexpected {err=}, {type(err)=}")
         raise
@@ -86,12 +86,12 @@ def handler(event, context):
         'body': json.dumps({"main_analyzer": "success"})
     }
 
-def store_summary_result(summary, video_name):
+def store_summary_result(summary, video_name, video_path):
     # Store summary in S3
     s3.put_object(
         Body=summary, 
         Bucket=bucket_name, 
-        Key=f"{summary_folder}/{video_name}.txt"
+        Key=f"{summary_folder}/{video_path}.txt"
     )
 
     # Get summary embedding
@@ -104,29 +104,37 @@ def store_summary_result(summary, video_name):
     # Disabling semgrep rule for checking data size to be loaded to JSON as the source is from Amazon Bedrock
     # nosemgrep: python.aws-lambda.deserialization.tainted-json-aws-lambda.tainted-json-aws-lambda
     summary_embedding = json.loads(response.get("body").read())["embedding"]
+    print("summary embedding")
+    print(summary_embedding)
 
     # Store summary in database
-    update_stmt = update(Videos).where(Videos.name == video_name).values(
-        summary=summary,
-        summary_embedding = summary_embedding
+    update_stmt = (
+        update(Videos).
+        where(Videos.name == video_name).
+        values(summary = summary, summary_embedding = summary_embedding)
     )
     
     session.execute(update_stmt)
     session.commit()
 
-def store_sentiment_result(sentiment_string, video_name):
+
+    print("summary embedding stored")
+
+def store_sentiment_result(sentiment_string, video_name, video_path):
     # Extract entities and sentiment from the string
     entities_dict = {}
-    entity_regex = r"^([\w\s]+?):(positive|negative|neutral|mixed)"
+    entity_regex = r"^([\w\s]+?)\s*:\s*(positive|negative|neutral|mixed)"
     for match in re.finditer(entity_regex, sentiment_string):
         entity = match.group(1).strip()
         sentiment = match.group(2)
         entities_dict[entity] = sentiment
+    print("entities dict")
+    print(entities_dict)
 
     s3.put_object(
         Body="\n".join(f"{e} : {s}" for e, s in entities_dict.items()), 
         Bucket=bucket_name, 
-        Key=f"{entity_sentiment_folder}/{video_name}.txt"
+        Key=f"{entity_sentiment_folder}/{video_path}.txt"
     )
 
     entities = []
@@ -141,17 +149,22 @@ def store_sentiment_result(sentiment_string, video_name):
     # Store into database
     session.add_all(entities)
     session.commit()
+
+    print("entities done")
+    print(entities_dict)
     
-def store_video_script_result(video_script, video_name):
+def store_video_script_result(video_script, video_name, video_path):
     s3.put_object(
         Body=video_script, 
         Bucket=bucket_name, 
-        Key=f"{video_script_folder}/{video_name}.txt"
+        Key=f"{video_script_folder}/{video_path}.txt"
     )
 
     # Chunking the video script for storage in DB while converting them to embedding
     video_script_length = len(video_script)
     number_of_chunks = math.ceil( (video_script_length + 1) / video_script_storage_chunk_size )
+    print("num chunks video script storage")
+    print(number_of_chunks)
 
     chunks = []
     for chunk_number in range(0, number_of_chunks):
@@ -176,6 +189,8 @@ def store_video_script_result(video_script, video_name):
         while(not call_done):
             try:
                 response = bedrock.invoke_model(body=body, modelId=embedding_model_id)
+                print("embedding response")
+                print(response)
                 call_done = True
             except ThrottlingException:
                 print("Amazon Bedrock throttling exception")
@@ -198,7 +213,7 @@ def store_video_script_result(video_script, video_name):
     session.add_all(chunks)
     session.commit()
 
-def analyze_video(labels_job_id, texts_job_id, video_name, video_transcript_s3_path):
+def analyze_video(labels_job_id, texts_job_id, video_transcript_s3_path):
     video_scenes, video_length = visual_scenes_iterate_pages(labels_job_id)
     video_texts = visual_texts_iterate_pages(texts_job_id)
     video_transcription_file = s3.get_object(Bucket=bucket_name, Key=video_transcript_s3_path)
@@ -542,6 +557,7 @@ class VideoAnalyzer(ABC):
             prompt = f"{prompt_prefix}\n\n" \
             f"{core_prompt}\n\n" \
             "Now your job is to list the entities you found in the video and their sentiment [positive, negative, mixed, neutral].\n" \
+            "Entities can be person, company, country, concept, brand, terms, or anything where audience may be interested in knowing the trend.\n" \
             "Your answer MUST consist ONLY pairs of entity and sentiment with : as delimiter. Follow the below format.\n\n" \
             "Entities:\n" \
             "mathematic:negative\nteacher:positive\nplaying in classroom:positive\nexamination:mixed\n\n" \
@@ -579,6 +595,7 @@ class VideoAnalyzer(ABC):
                     f"The below VIDEO SCRIPT is only for the LAST video part.\n\n" \
                     f"{core_prompt}\n\n" \
                     "Now your job is to list the entities you found in the video and their sentiment [positive, negative, mixed, neutral]. Also provide the reasoning.\n" \
+                    "Entities can be person, company, country, concept, brand, terms, or anything where audience may be interested in knowing the trend.\n" \
                     "Your answer MUST consist ONLY pairs of entity and sentiment with : as delimiter. NO reasoning. Follow the below format.\n\n" \
                     "Entities:\n" \
                     "mathematic:negative\n" \
@@ -598,6 +615,7 @@ class VideoAnalyzer(ABC):
                     f"The video has {number_of_chunks} parts. The below VIDEO SCRIPT is only for the first part.\n\n" \
                     f"{core_prompt}\n\n" \
                     "Now your job is to list the entities you found in the video and their sentiment [positive, negative, mixed, neutral]. Also provide the reasoning.\n" \
+                    "Entities can be person, company, country, concept, brand, terms, or anything where audience may be interested in knowing the trend.\n" \
                     "Your answer MUST consist ONLY pairs of entity and sentiment with : as delimiter, and the reasoning after - sign. Follow the below format.\n\n" \
                     "Entities:\n" \
                     "mathematic:negative - The kid being interviewed said he dreads math.\n" \
@@ -619,6 +637,7 @@ class VideoAnalyzer(ABC):
                     f"The below VIDEO SCRIPT is only for part {chunk_number} of the video.\n\n" \
                     f"{core_prompt}\n\n" \
                     "Now your job is to list the entities you found in the whole video so far and their sentiment [positive, negative, mixed, neutral]. Also provide the reasoning.\n" \
+                    "Entities can be person, company, country, concept, brand, terms, or anything where audience may be interested in knowing the trend.\n" \
                     "Your answer MUST consist ONLY pairs of entity and sentiment with : as delimiter, and the reasoning after - sign. Follow the below format.\n\n" \
                     "Entities:\n" \
                     "mathematic:negative - The kid being interviewed said he dreads math.\n" \
@@ -726,13 +745,5 @@ class VideoAnalyzerSageMaker(VideoAnalyzer):
 
 
 if __name__ == "__main__":
-    # Assuming input is of this structure
-    #{
-    #   "payloads": [{},{}]    
-    #}
-    print("input data")
-    print(os.getenv("INPUT_DATA"))
-    payloads = json.loads(os.getenv("INPUT_DATA"))
-    print("payloads")
-    print(payloads)
-    return handler(payloads, None)
+    print("called")
+    handler()
