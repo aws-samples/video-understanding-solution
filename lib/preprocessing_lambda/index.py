@@ -24,8 +24,6 @@ password = credentials["password"]
 engine = create_engine(f'postgresql://{username}:{password}@{writer_endpoint}:5432/{database_name}')
 Base = declarative_base()
 
-print("1")
-
 class Videos(Base):
     __tablename__ = video_table_name
     
@@ -45,7 +43,8 @@ def handler(event, context):
     
     print(video_s3_path)
 
-    video_name = os.path.basename(video_s3_path)
+    # Get the name of the video along with its folder location from the raw_folder.
+    video_name = '/'.join(video_s3_path.split('/')[1:]) #os.path.basename(video_s3_path)
 
     # Validate video file extension. Only .mp4, .MP4, .mov, and .MOV are allowed.
     if video_name[-4:] not in [".mp4", ".MP4", ".mov", ".MOV"]:
@@ -53,8 +52,6 @@ def handler(event, context):
             'statusCode': 400,
             'body': json.dumps({"preprocessing": "Unsupported video file extension. Only .mp4, .MP4, .mov, and .MOV are allowed."})
         }
-    
-    print("2")
 
     # Parameterize
     video_name_param = bindparam('name') 
@@ -72,8 +69,6 @@ def handler(event, context):
         }
     )
 
-    print("3")
-
     with session.begin():
         date_now = datetime.now(timezone.utc)
         session.execute(upsert, {
@@ -81,7 +76,6 @@ def handler(event, context):
             "uploaded_at": date_now
         })
         session.commit()
-        print("4")
 
     return {
         'statusCode': 200,

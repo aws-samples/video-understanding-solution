@@ -110,7 +110,7 @@ def store_summary_result(summary, video_name, video_path):
     # Store summary in database
     update_stmt = (
         update(Videos).
-        where(Videos.name == video_name).
+        where(Videos.name == video_path).
         values(summary = summary, summary_embedding = summary_embedding)
     )
     
@@ -143,7 +143,7 @@ def store_sentiment_result(sentiment_string, video_name, video_path):
         entities.append(Entities(
             name=entity,
             sentiment=sentiment,
-            video_name=video_name
+            video_name=video_path
         ))
 
     # Store into database
@@ -206,7 +206,7 @@ def store_video_script_result(video_script, video_name, video_path):
         chunks.append(Contents(
             chunk=chunk_string,
             chunk_embedding=chunk_embedding,
-            video_name=video_name
+            video_name=video_path
         ))
 
     # Store in database

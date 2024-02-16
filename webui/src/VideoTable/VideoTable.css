@@ -7,3 +7,10 @@
 .paragraph-with-newlines{
     white-space: pre-line
 }
+.left-align-no-bottom-margin{
+    text-align: left;
+    margin-bottom: 0px;
+}
+.search-button{
+    margin-top: 15px;
+}

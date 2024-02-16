@@ -644,7 +644,10 @@ class VideoUnderstandingSolutionStack(Stack):
         )
 
         # Log group for the container
-        main_analyzer_log_group = _logs.LogGroup(self, "WSAccessLogGroup", log_group_name=f"{construct_id}-analyzer")
+        main_analyzer_log_group = _logs.LogGroup(self, "AnalyzerAccessLogGroup", 
+            log_group_name=f"{construct_id}-analyzer",
+            removal_policy=RemovalPolicy.DESTROY,
+        )
 
         analyzer_container_definition = analyzer_task_definition.add_container("analyzer",
             image=_ecs.ContainerImage.from_docker_image_asset(
@@ -897,7 +900,10 @@ class VideoUnderstandingSolutionStack(Stack):
         )
 
         # Log group for API Gateway REST API
-        rest_access_log_group = _logs.LogGroup(self, "RestAPIAccessLogGroup", log_group_name=f"{construct_id}-rest-api")
+        rest_access_log_group = _logs.LogGroup(self, "RestAPIAccessLogGroup", 
+            log_group_name=f"{construct_id}-rest-api",
+            removal_policy=RemovalPolicy.DESTROY,
+        )
 
         # API Gateway REST API
         rest_api = _apigw.RestApi(self, 
@@ -944,6 +950,11 @@ class VideoUnderstandingSolutionStack(Stack):
                         _iam.PolicyStatement(
                             actions=["bedrock:InvokeModel"],
                             resources=[f"arn:aws:bedrock:{aws_region}::foundation-model/*"],
+                            effect=_iam.Effect.ALLOW,
+                        ),
+                        _iam.PolicyStatement(
+                            actions=["secretsmanager:GetSecretValue"],
+                            resources=[aurora_cluster_secret.secret_full_arn],
                             effect=_iam.Effect.ALLOW,
                         ),
                     ]
@@ -1034,7 +1045,9 @@ class VideoUnderstandingSolutionStack(Stack):
                 _apigw.MethodResponse(
                     status_code="200",
                     response_parameters={
-                        'method.response.header.Access-Control-Allow-Origin': True
+                        'method.response.header.Access-Control-Allow-Origin': True,
+                        'method.response.header.Access-Control-Allow-Headers': True,
+                        'method.response.header.Access-Control-Allow-Methods': True
                     }
                 )
             ],

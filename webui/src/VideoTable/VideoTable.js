@@ -27,7 +27,8 @@ export class VideoTable extends Component {
       pages: {},
       firstFetch: false,
       searchByNameText: "",
-      searchByDateText: "",
+      searchByStartDate: null,
+      searchByEndDate: null,
       searchByAboutText: "",
     };
     this.s3Client = props.s3Client
@@ -41,6 +42,7 @@ export class VideoTable extends Component {
     this.entitySentimentFolder = props.entitySentimentFolder
     this.restApiUrl = props.restApiUrl
     this.videosApiResource = props.videosApiResource
+    this.cognitoTs = props.cognitoTs
     this.maxCharactersForChat = 5000
     this.maxCharactersForVideoScript = 300000
     this.maxCharactersForSingleLLMCall = 100000
@@ -49,6 +51,7 @@ export class VideoTable extends Component {
     this.renderVideoTableBody = this.renderVideoTableBody.bind(this)
     this.render = this.render.bind(this)
     this.renderChat = this.renderChat.bind(this)
+
   }
 
   async componentDidMount() {
@@ -64,21 +67,27 @@ export class VideoTable extends Component {
     if(this.state.searchByNameText != ""){
       params += `video_name_starts_with=${encodeURI(this.state.searchByNameText)}&`
     }
-    if(this.state.searchByDateText != ""){
-      params += `uploaded_between=${encodeURI(this.state.searchByDateText)}&`
+    if(this.state.searchByStartDate != null && this.state.searchByStartDate != null ){
+      const startDateString = this.state.searchByStartDate.toISOString()
+      const endDateString = this.state.searchByEndDate.toISOString()
+      params += `uploaded_between=${encodeURI(startDateString + "|" + endDateString)}&`
     }
     if(this.state.searchByAboutText != ""){
       params += `about=${encodeURI(this.state.searchByAboutText)}`
     }
 
     // Call API Gateway to fetch the video names
+    var ts = await this.cognitoTs;
+
     const response = await fetch(`${this.restApiUrl}/${this.videosApiResource}${params}`, {
       method: 'GET',
       headers: {
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'Authorization': ts.idToken.toString(),
       }
     })
-    const responseBody = response.body
+
+    const responseBody = await(response.json())
     
     if(responseBody.videos.length == 0) return [videos, this.state.pages];
 
@@ -455,24 +464,13 @@ export class VideoTable extends Component {
     this.setState({searchByAboutText: event.target.value })
   }
 
-  async handleSearchByDateTextChange(event){
-    const dateString = event.target.value
-    const dateArray = dateString.split(" - ")
-    const startDate = new Date(dateArray[0]).toISOString()
-    const endDate = new Date(dateArray[1]).toISOString()
-    this.setState({searchByAboutText: `${startDate}|${endDate}` })
-  }
-
-  showLocalStartDate(){
-    if (this.state.searchByDateText == "") return ""
-    const  dateArray = this.state.searchByDateText.split("|")
-    return new Date(dateArray[0].split(" ")[0]).toLocaleDateString()
-  }
-
-  showLocalEndDate(){
-    if (this.state.searchByDateText == "") return ""
-    const  dateArray = this.state.searchByDateText.split("|")
-    return new Date(dateArray[0].split(" ")[1]).toLocaleDateString()
+  async handleSearchByDateChange(event){
+    const startDate = event[0]
+    const endDate = event[1]
+    this.setState({
+      searchByStartDate: startDate,
+      searchByEndDate: endDate
+    })
   }
 
   async handleSearch(){
@@ -551,8 +549,10 @@ export class VideoTable extends Component {
         <Col>
           <Row>
             <Col> 
+              <p className="left-align-no-bottom-margin">
+                <Form.Label >Search videos with filters</Form.Label>
+              </p>
               <InputGroup className="mb-3">
-                <Form.Label>Search videos with filters:</Form.Label>
                 <Form.Control
                   type="text"
                   placeholder="Name starts with . . ."
@@ -561,10 +561,12 @@ export class VideoTable extends Component {
                   value={this.state.searchByNameText}
                 />
                 <DatePicker
-                  onChange={this.handleSearchByDateTextChange.bind(this)}
-                  startDate={this.showLocalStartDate()}
-                  endDate={this.showLocalEndDate()}
                   selectsRange={true}
+                  startDate={this.state.searchByStartDate}
+                  endDate={this.state.searchByEndDate}
+                  onChange={(update) => {
+                    this.handleSearchByDateChange(update);
+                  }}
                   isClearable={true}
                   showIcon={true}
                   placeholderText="Uploaded between . . ."
@@ -572,18 +574,21 @@ export class VideoTable extends Component {
              </InputGroup>
              <Form.Control
                 type="text"
-                placeholder="Video is about . . .  (genAI-powered)"
+                placeholder="[generative-AI-powered] Content about . . ."
                 aria-label="SearchAbout"
                 onChange={this.handleSearchByAboutTextChange.bind(this)}
                 value={this.state.searchByAboutText}
               />
-              <Button onClick={this.handleSearch.bind(this)} variant="success" id="search-video">
-                Search
-              </Button>
+              <div className="d-grid gap-2 search-button">
+                <Button onClick={this.handleSearch.bind(this)} variant="success" id="search-video">
+                  Search
+                </Button>
+              </div>
               
             </Col>
             {/* <Col></Col> */}
           </Row>
+          <Row><Col><hr></hr></Col></Row>
           <Row><Col>         
             <Pagination>
               { Object.keys(this.state.pages).map((i) => { return this.renderPagination(i) })}

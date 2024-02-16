@@ -12,6 +12,7 @@ secrets_manager = boto3.client('secretsmanager')
 
 reader_endpoint = os.environ['DB_READER_ENDPOINT']
 database_name = os.environ['DATABASE_NAME']
+video_table_name = os.environ['VIDEO_TABLE_NAME']
 secret_name = os.environ['SECRET_NAME']
 embedding_model_id = os.environ["EMBEDDING_MODEL_ID"]
 embedding_dimension = os.environ['EMBEDDING_DIMENSION']
@@ -92,6 +93,7 @@ def handler(event, context):
         videos = videos.params(summary_embedding=about_embedding)
 
     video_names = videos.offset(page*page_size).limit(page_size+1).all()
+    video_names = [v.name for v in video_names]
 
     next_page = None
     if len(video_names) > page_size:
@@ -103,11 +105,15 @@ def handler(event, context):
         "page_size": page_size,
     }
     if next_page is not None: response_payload['next_page'] = next_page
+    print(response_payload)
 
     response = {
         "statusCode": 200,
         "headers": {
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Methods": "*"
         },
         "body": json.dumps(response_payload)
     }
