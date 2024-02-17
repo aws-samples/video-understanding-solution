@@ -158,7 +158,9 @@ export class VideoTable extends Component {
     try {
       const response = await this.s3Client.send(command);
       video.summary = await response.Body.transformToString();
-    } catch (err) {}
+    } catch (err) {
+      console.log(err)
+    }
 
     // Try to find the entities and sentiment
     var command = new GetObjectCommand({
@@ -168,7 +170,9 @@ export class VideoTable extends Component {
     try {
       const response = await this.s3Client.send(command);
       video.entities = await response.Body.transformToString();
-    } catch (err) {}
+    } catch (err) {
+      console.log(err)
+    }
 
 
     // Try to get the video script

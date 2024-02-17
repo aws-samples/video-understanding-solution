@@ -11,6 +11,7 @@ import InputGroup from 'react-bootstrap/InputGroup';
 import Row from "react-bootstrap/Row";
 import Col from "react-bootstrap/Col";
 import Button from "react-bootstrap/Button";
+import ProgressBar from 'react-bootstrap/ProgressBar';
 
 import './VideoUpload.css';
 
@@ -20,6 +21,8 @@ export class VideoUpload extends Component {
     this.state = {
       selectedVideoFiles: null,
       isUploading: false,
+      currentUploadSize: 0,
+      totalUploadSize: 0.001,
     };
 
     this.s3Client = props.s3Client;
@@ -28,7 +31,6 @@ export class VideoUpload extends Component {
   }
 
   onFileChange = (event) => {
-    // console.log(event.target.files[0])
     this.setState({
       selectedVideoFiles: event.target.files,
     });
@@ -39,8 +41,16 @@ export class VideoUpload extends Component {
       isUploading: true
     });
 
+    for (let i = 0; i < this.state.selectedVideoFiles.length; i++) { 
+      this.setState({
+        totalUploadSize: this.state.totalUploadSize + parseInt(this.state.selectedVideoFiles[i].size)
+      });
+    }
+    
+    
+
     for (let i = 0; i < this.state.selectedVideoFiles.length; i++) {
-      const fileSize = this.state.selectedVideoFiles[i].fileSize
+      const fileSize = this.state.selectedVideoFiles[i].size
       if(fileSize >=25e6){ // User Multipart upload
         let uploadId;
         try {
@@ -55,12 +65,14 @@ export class VideoUpload extends Component {
 
           const uploadPromises = [];
           // Multipart uploads require a minimum size of 5 MB per part.
-          const partSize = Math.ceil(fileSize / 5e6);
+          const partSize = 10e6
+          const numberOfParts = Math.floor(fileSize / partSize)
+          const lastPartSize = partSize + fileSize % partSize
 
           // Upload each part.
-          for (let i = 0; i < 5; i++) {
-            const start = i * partSize;
-            const end = start + partSize;
+          for (let j = 0; j < numberOfParts; j++) {
+            const start = j * partSize;
+            const end = (j === numberOfParts - 1 ) ? (start + lastPartSize) : (start + partSize)
             uploadPromises.push(
               this.s3Client
                 .send(
@@ -68,16 +80,21 @@ export class VideoUpload extends Component {
                     Bucket: this.bucketName,
                     Key: `${this.rawFolder}/${this.state.selectedVideoFiles[i].name}`,
                     UploadId: uploadId,
-                    Body: this.state.selectedVideoFiles[i].subarray(start, end),
-                    PartNumber: i + 1,
+                    Body: this.state.selectedVideoFiles[i].slice(start, end),
+                    PartNumber: j + 1,
                   }),
-                )
+                ).then(singlePartUploadResult => {
+                  this.setState({
+                    currentUploadSize: this.state.currentUploadSize + ((j === numberOfParts - 1 ) ? lastPartSize : partSize)
+                  });
+                  return singlePartUploadResult
+                })
             );
           }
 
           const uploadResults = await Promise.all(uploadPromises);
 
-          return await this.s3Client.send(
+          await this.s3Client.send(
             new CompleteMultipartUploadCommand({
               Bucket: this.bucketName,
               Key: `${this.rawFolder}/${this.state.selectedVideoFiles[i].name}`,
@@ -114,15 +131,20 @@ export class VideoUpload extends Component {
         // Upload file  
         try { 
           await this.s3Client.send(command);
+          this.setState({
+            currentUploadSize: this.state.currentUploadSize + parseInt(this.state.selectedVideoFiles[i].size)
+          });
         } catch (error) {
-          console.err(error)
+          console.log(error)
         }
       }
     }
 
     this.setState({
       isUploading: false,
-      selectedVideoFiles: null
+      selectedVideoFiles: null,
+      currentUploadSize: 0,
+      totalUploadSize: 0.001,
     });
   };
 
@@ -155,6 +177,8 @@ export class VideoUpload extends Component {
             <p className="no-margin-bottom" align="left">Alternatively, upload to Amazon S3 bucket <i>"{this.bucketName}"</i> inside folder <i>"{this.rawFolder}"</i>.</p>
           </Col>
         </Row>
+        { this.state.isUploading ? <Row><Col> <ProgressBar animated now={Math.floor(this.state.currentUploadSize / parseInt(this.state.totalUploadSize) * 100)} label={`${Math.floor(this.state.currentUploadSize / parseInt(this.state.totalUploadSize) * 100)}%`} /></Col></Row> : "" }
+        { this.state.isUploading && Math.floor(this.state.currentUploadSize / parseInt(this.state.totalUploadSize) * 100) > 50 ? <Row><Col><p>When upload finishes, you can reload page or re-search the videos to refresh the video list.</p></Col></Row> : "" }
       </>
     );
   }

@@ -6,6 +6,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, mapped_column
 from sqlalchemy.sql import bindparam
 from pgvector.sqlalchemy import Vector
+from datetime import datetime
 
 bedrock = boto3.client("bedrock-runtime")
 secrets_manager = boto3.client('secretsmanager')
@@ -18,6 +19,7 @@ embedding_model_id = os.environ["EMBEDDING_MODEL_ID"]
 embedding_dimension = os.environ['EMBEDDING_DIMENSION']
 
 page_size = 25
+acceptable_embedding_distance = 50
 
 credentials = json.loads(secrets_manager.get_secret_value(SecretId=secret_name)["SecretString"])
 username = credentials["username"]
@@ -49,18 +51,21 @@ def handler(event, context):
     # Use SQLAlchemy to search videos with the 3 filters above.
     videos = session.query(Videos.name)
     if video_name_starts_with is not None:
+        print(video_name_starts_with)
         video_name_starts_with_param = bindparam("name")
-        videos = videos.filter(Videos.name.like(f"{video_name_starts_with_param}%"))
+        videos = videos.filter(Videos.name.like(f"{video_name_starts_with}%"))#video_name_starts_with_param))
     if uploaded_between is not None:
-         # Assume uploaded_between is like 2024-12-03 10:30:11 +08:00|2024-12-07 19:30:11 +08:00
+        # Assume uploaded_between is like 2024-02-07T16:00:00.000Z|2024-02-15T16:00:00.000Z
         start, stop = uploaded_between.split("|")
-        start = datetime.strptime(start, "%Y-%m-%d %H:%M:%S %z")
-        stop = datetime.strptime(stop, "%Y-%m-%d %H:%M:%S %z")
-        start_param = bindparam("start")
-        stop_param = bindparam("stop")
-
-        videos = videos.filter(Videos.uploaded_at.between(start_param, stop_param))
+        start = datetime.strptime(start[:-5], "%Y-%m-%dT%H:%M:%S")
+        stop = datetime.strptime(stop[:-5], "%Y-%m-%dT%H:%M:%S")
+        #start_param = bindparam("start")
+        #stop_param = bindparam("stop")
+        print(start)
+        print(stop)
+        videos = videos.filter(Videos.uploaded_at.between(start, stop))#start_param, stop_param))
     if about is not None:
+        print(about)
         # Get the embedding for the video topic
         body = json.dumps(
             {
@@ -81,20 +86,25 @@ def handler(event, context):
         # Disabling semgrep rule for checking data size to be loaded to JSON as the source is from Amazon Bedrock
         # nosemgrep: python.aws-lambda.deserialization.tainted-json-aws-lambda.tainted-json-aws-lambda
         about_embedding = json.loads(response.get("body").read())["embedding"]
+        print(about_embedding)
+        #summary_embedding_param = bindparam("summary_embedding")
+        videos = videos.filter(Videos.summary_embedding.l2_distance(about_embedding) < acceptable_embedding_distance)
 
-        summary_embedding_param = bindparam("summary_embedding")
-        videos = videos.order_by(Videos.summary_embedding.l2_distance(summary_embedding_param))
+    #if video_name_starts_with is not None:
+    #   videos = videos.params(name=f"{video_name_starts_with}%")
+    #if uploaded_between is not None:
+    #    videos = videos.params(start=start, stop=stop)
+    #if about is not None:
+    #    videos = videos.params(summary_embedding=about_embedding)
 
-    if video_name_starts_with is not None:
-        videos = videos.params(name=video_name_starts_with)
-    if uploaded_between is not None:
-        videos = videos.params(start=start, stop=stop)
-    if about is not None:
-        videos = videos.params(summary_embedding=about_embedding)
+    videos = videos.offset(page*page_size).limit(page_size+1)
+    print("actual query")
+    print(str(videos))
+    
 
-    video_names = videos.offset(page*page_size).limit(page_size+1).all()
+    video_names = videos.all()
     video_names = [v.name for v in video_names]
-
+    print(video_names)
     next_page = None
     if len(video_names) > page_size:
         video_names = video_names[:page_size]

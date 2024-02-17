@@ -104,8 +104,6 @@ def store_summary_result(summary, video_name, video_path):
     # Disabling semgrep rule for checking data size to be loaded to JSON as the source is from Amazon Bedrock
     # nosemgrep: python.aws-lambda.deserialization.tainted-json-aws-lambda.tainted-json-aws-lambda
     summary_embedding = json.loads(response.get("body").read())["embedding"]
-    print("summary embedding")
-    print(summary_embedding)
 
     # Store summary in database
     update_stmt = (
@@ -121,9 +119,11 @@ def store_summary_result(summary, video_name, video_path):
     print("summary embedding stored")
 
 def store_sentiment_result(sentiment_string, video_name, video_path):
+    print("sentiment string is")
+    print(sentiment_string)
     # Extract entities and sentiment from the string
     entities_dict = {}
-    entity_regex = r"^([\w\s]+?)\s*:\s*(positive|negative|neutral|mixed)"
+    entity_regex = r"\n*([\w\s\'\.]+?)\s*:\s*(positive|negative|neutral|mixed)"
     for match in re.finditer(entity_regex, sentiment_string):
         entity = match.group(1).strip()
         sentiment = match.group(2)
@@ -651,6 +651,8 @@ class VideoAnalyzer(ABC):
                     
                     chunk_sentiment = self.call_llm(prompt)
                     self.video_rolling_sentiment = chunk_sentiment
+        print("video rolling sentiment")
+        print(self.video_rolling_sentiment)
                 
         return self.video_rolling_sentiment
       
