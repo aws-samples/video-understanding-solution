@@ -123,13 +123,13 @@ def store_sentiment_result(sentiment_string, video_name, video_path):
     print(sentiment_string)
     # Extract entities and sentiment from the string
     entities_dict = {}
-    entity_regex = r"\n*([\w\s\'\.\/\,]+?)\s*\|\s*(positive|negative|neutral|mixed|N\/A)\s*\|\s*([\w\s\'\.\/\,]+?)\n"
+    entity_regex = r"\n*([^|\n]+?)\|\s*(positive|negative|neutral|mixed|N\/A)\s*\|([^|\n]+?)\n"
     for match in re.finditer(entity_regex, sentiment_string):
         entity = match.group(1).strip()
         sentiment = match.group(2)
         reason = match.group(3)
         entities_dict[entity] = {
-            "sentiment": sentiment
+            "sentiment": sentiment,
             "reason": reason
         }
     print("entities dict")

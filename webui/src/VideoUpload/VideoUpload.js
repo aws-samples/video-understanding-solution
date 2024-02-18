@@ -41,14 +41,14 @@ export class VideoUpload extends Component {
       isUploading: true
     });
 
+    var totalSizeToUpload = 0.0
     for (let i = 0; i < this.state.selectedVideoFiles.length; i++) { 
-      this.setState({
-        totalUploadSize: this.state.totalUploadSize + parseInt(this.state.selectedVideoFiles[i].size)
-      });
+      totalSizeToUpload += this.state.selectedVideoFiles[i].size
     }
+    this.setState({
+      totalUploadSize: this.state.totalUploadSize + totalSizeToUpload
+    });
     
-    
-
     for (let i = 0; i < this.state.selectedVideoFiles.length; i++) {
       const fileSize = this.state.selectedVideoFiles[i].size
       if(fileSize >=25e6){ // User Multipart upload
@@ -178,7 +178,7 @@ export class VideoUpload extends Component {
           </Col>
         </Row>
         { this.state.isUploading ? <Row><Col> <ProgressBar animated now={Math.floor(this.state.currentUploadSize / parseInt(this.state.totalUploadSize) * 100)} label={`${Math.floor(this.state.currentUploadSize / parseInt(this.state.totalUploadSize) * 100)}%`} /></Col></Row> : "" }
-        { this.state.isUploading && Math.floor(this.state.currentUploadSize / parseInt(this.state.totalUploadSize) * 100) > 50 ? <Row><Col><p>When upload finishes, you can reload page or re-search the videos to refresh the video list.</p></Col></Row> : "" }
+        { this.state.isUploading && Math.floor(this.state.currentUploadSize / parseInt(this.state.totalUploadSize) * 100) > 50 ? <Row><Col><p className="no-margin-bottom" align="left">When upload finishes, you can reload page or re-search the videos to refresh the video list.</p></Col></Row> : "" }
       </>
     );
   }

@@ -525,8 +525,9 @@ export class VideoTable extends Component {
               <Row>
                 <Col className={video.loaded  ? "" : "d-none"}>
                   <Row><Col><h5 align="left">Entities:</h5></Col></Row>
-                  { typeof video.entities === "undefined" ? <Row><Col><p className="paragraph-with-newlines">Entity list is not ready yet</p></Col></Row> : <Row><Col xs={3}>Entity</Col><Col xs={1}>Sentiment</Col><Col>Reason</Col></Row> }
+                  { typeof video.entities === "undefined" ? <Row><Col><p className="paragraph-with-newlines" align="left">Entity list is not ready yet</p></Col></Row> : <Row><Col className="left-align-no-bottom-margin" xs={3}><b>Entity</b></Col><Col className="left-align-no-bottom-margin" xs={1}><b>Sentiment</b></Col><Col className="left-align-no-bottom-margin"><b>Reason</b></Col></Row> }
                   { typeof video.entities !== "undefined" ? this.renderEntities(video, i) : "" }
+                  <br/>
                 </Col>
               </Row>
               <Row>
