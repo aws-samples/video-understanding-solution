@@ -50,7 +50,6 @@ def handler(event, context):
     # Use SQLAlchemy to search videos with the 3 filters above.
     videos = session.query(Videos.name)
     if video_name_starts_with is not None:
-        print(video_name_starts_with)
         video_name_starts_with_param = bindparam("name")
         videos = videos.filter(Videos.name.like(video_name_starts_with_param))
     if uploaded_between is not None:
@@ -60,11 +59,8 @@ def handler(event, context):
         stop = datetime.strptime(stop[:-5], "%Y-%m-%dT%H:%M:%S")
         start_param = bindparam("start")
         stop_param = bindparam("stop")
-        print(start)
-        print(stop)
         videos = videos.filter(Videos.uploaded_at.between(start_param, stop_param))
     if about is not None:
-        print(about)
         # Get the embedding for the video topic
         body = json.dumps(
             {
@@ -85,8 +81,6 @@ def handler(event, context):
         # Disabling semgrep rule for checking data size to be loaded to JSON as the source is from Amazon Bedrock
         # nosemgrep: python.aws-lambda.deserialization.tainted-json-aws-lambda.tainted-json-aws-lambda
         about_embedding = json.loads(response.get("body").read())["embedding"]
-        print(about_embedding)
-        #summary_embedding_param = bindparam("summary_embedding")
 
         videos = videos.filter(Videos.summary_embedding.cosine_distance(about_embedding) < acceptable_embedding_distance)
 
@@ -96,13 +90,10 @@ def handler(event, context):
        videos = videos.params(start=start, stop=stop)
 
     videos = videos.offset(page*display_page_size).limit(display_page_size+1)
-    print("actual query")
-    print(str(videos))
     
-
     video_names = videos.all()
     video_names = [v.name for v in video_names]
-    print(video_names)
+
     next_page = None
     if len(video_names) > display_page_size:
         video_names = video_names[:display_page_size]
@@ -113,7 +104,6 @@ def handler(event, context):
         "pageSize": display_page_size,
     }
     if next_page is not None: response_payload['nextPage'] = next_page
-    print(response_payload)
 
     response = {
         "statusCode": 200,

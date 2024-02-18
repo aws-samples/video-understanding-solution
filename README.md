@@ -61,26 +61,25 @@ In the Web UI portal, you can search for videos in your S3 bucket. For each vide
 ## Cost
 The cost of using this solution is determined by the pricing and usage of the components being deployed. This includes, but not necessarily being limited to:
 
-1. Fixed components:
+1. Less variable components:
     1.1. Amazon Aurora PostgreSQL - Pricing is [here](https://aws.amazon.com/rds/aurora/pricing/). This solution by default uses 2 x 0.5 ACU of Aurora Serverless PostgreSQL.
     1.2. NAT Gateway - Pricing is [here](https://aws.amazon.com/vpc/pricing/). This is used for egress access of Fargate task and some Lambda function. By default this solution uses 1 NAT Gateway.
+    1.3. Amazon Cognito - Pricing is [here](https://aws.amazon.com/cognito/pricing/). You may be eligible for its FREE TIER. This solution uses Cognito user pool and identity pool.
+    1.4. AWS Secret Manager - Pricing is [here](https://aws.amazon.com/secrets-manager/pricing/). You may be eligible for its FREE TRIAL. This is used to store credentials.
 
-2. Variable components:
-    2.1. Amazon Rekognition - Pricing is [here](https://aws.amazon.com/rekognition/pricing/). This solution uses Stored Video Analysis for Label Detection and Text Detection. The cost can vary based on the video duration and the number of videos being processed.
-    2.2. Amazon Transcribe - Pricing is [here](https://aws.amazon.com/transcribe/pricing/). This solution uses Standard Batch transcription. The cost can vary based on the video duration and the number of videos being processed.
+2. More variable components (driven mainly by the total number of video minutes being processed and the activities e.g. chat):
+    2.1. Amazon Rekognition - Pricing is [here](https://aws.amazon.com/rekognition/pricing/). You may be eligible for its FREE TIER for video analysis. This solution uses Stored Video Analysis for Label Detection and Text Detection. The cost can vary based on the video duration and the number of videos being processed.
+    2.2. Amazon Transcribe - Pricing is [here](https://aws.amazon.com/transcribe/pricing/). Youo may be eligible for its FREE TIER. This solution uses Standard Batch transcription. The cost can vary based on the video duration and the number of videos being processed.
     2.3. Amazon Bedrock - Pricing is [here](https://aws.amazon.com/bedrock/pricing/). This solution uses Claude Instant and Titan Embeddings G1 - Text model. The cost can vary based on the amount of information extracted from the video and the usage frequency.
-    2.4. Amazon S3 - Pricing is [here](https://aws.amazon.com/s3/pricing/). S3 is used for storing the raw videos and the extracted information.
+    2.4. Amazon S3 - Pricing is [here](https://aws.amazon.com/s3/pricing/). You may be eligible for its FREE TIER. S3 is used for storing the raw videos and the extracted information.
     2.5. AWS Fargate - Pricing is [here](https://aws.amazon.com/fargate/pricing/). Fargate task is where the extracted video information is being analyzed and where the calls to LLMs for summary and entities generation happen. It is provisioned on demand when a video is uploaded.
-    2.6. AWS Lambda - Pricing is [here](https://aws.amazon.com/lambda/pricing/). Lambda function is used in several parts of the worklflow, including to handle video search requests.
-    2.7. Amazon API Gateway - Pricing is [here](https://aws.amazon.com/api-gateway/pricing/). API Gateway is used to power the video search API.
-    2.8. AWS Step Functions - Pricing is [here](https://aws.amazon.com/step-functions/pricing/). Step functions is used to orchestrate the video processing workflow.
-    2.9. AWS Amplify - Pricing is [here](https://aws.amazon.com/amplify/pricing/). This solution uses the Amplify for hosting the UI. See under "Host an app" part of the pricing page.
-    2.10. Amazon Cognito - Pricing is [here](https://aws.amazon.com/cognito/pricing/). This solution uses Cognito user pool and identity pool.
-    2.11. Amazon EventBridge - Pricing is [here](https://aws.amazon.com/eventbridge/pricing/). This solution uses event bus and rule.
-    2.12. Amazon CloudWatch - Pricing is [here](https://aws.amazon.com/cloudwatch/pricing/). Amazon CloudWatch metrics and logs are used.
-    2.13. AWS Secret Manager - Pricing is  [here](https://aws.amazon.com/secrets-manager/pricing/). This is used to store credentials.
-
-The main cost contributors are likely coming from Rekognition, Transcribe, and Bedrock for large number of long videos. It is recommended for you to test with smaller number of shorter videos e.g. 3 videos with < 15 minutes each and observe the cost after a few days. It is recommended to monitor the cost with [AWS Cost Explorer](https://aws.amazon.com/aws-cost-management/aws-cost-explorer/) and set budget and alerts with [AWS Budget](https://aws.amazon.com/aws-cost-management/aws-budgets/).
+    2.6. AWS Lambda - Pricing is [here](https://aws.amazon.com/lambda/pricing/). You may be eligible for its FREE TIER. Lambda function is used in several parts of the worklflow, including to handle video search requests.
+    2.7. Amazon API Gateway - Pricing is [here](https://aws.amazon.com/api-gateway/pricing/). You may be eligible for its FREE TIER.. API Gateway is used to power the video search API.
+    2.8. AWS Step Functions - Pricing is [here](https://aws.amazon.com/step-functions/pricing/). You may be eligible for its FREE TIER. Step functions is used to orchestrate the video processing workflow.
+    2.9. AWS Amplify - Pricing is [here](https://aws.amazon.com/amplify/pricing/). You may be eligible for its FREE TIER. This solution uses the Amplify for hosting the UI. See under "Host an app" part of the pricing page.
+    2.10. Amazon CloudWatch - Pricing is [here](https://aws.amazon.com/cloudwatch/pricing/). You may be eligible for its FREE TIER. Amazon CloudWatch metrics and logs are used.
+   
+The main cost contributors are likely coming from Rekognition, Transcribe, and Bedrock for large number of long videos. It is recommended to test with smaller number of shorter videos first and observe the cost. It is recommended to monitor the cost with [AWS Cost Explorer](https://aws.amazon.com/aws-cost-management/aws-cost-explorer/) and set budget and alerts with [AWS Budget](https://aws.amazon.com/aws-cost-management/aws-budgets/). You can filter the cost by tagging with key = "Application" and value = "VideoUnderstandingSolution" to monitor the cost generated by this solution when deployed. Please note that some compnents may not be tagged or may not be taggable.
 
 
 ## Limitations
@@ -88,6 +87,7 @@ The main cost contributors are likely coming from Rekognition, Transcribe, and B
 1. Currently only .mp4/.MP4 video files are supported
 2. This solution is only tested on English videos.
 3. Videos under 15 minutes work best. Longer video currently may have higher chat reply latency.
+4. Video file names (when uploaded) must adhere to the [S3 object key pattern](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html). When uploaded via this solution's UI, it will automatically convert non-compliant characters to _ (underscore).
 
 ## Removal
 To remove the solution from your AWS account, run `make destroy` and specify the region.

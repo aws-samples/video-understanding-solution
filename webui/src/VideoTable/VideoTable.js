@@ -578,7 +578,7 @@ export class VideoTable extends Component {
               <InputGroup className="mb-3">
                 <Form.Control
                   type="text"
-                  placeholder="Name starts with . . ."
+                  placeholder="Video name starts with . . ."
                   aria-label="SearchName"
                   onChange={this.handleSearchByNameTextChange.bind(this)}
                   value={this.state.searchByNameText}
@@ -592,12 +592,12 @@ export class VideoTable extends Component {
                   }}
                   isClearable={true}
                   showIcon={true}
-                  placeholderText="Uploaded between . . ."
+                  placeholderText="Video uploaded between . . ."
                 />
              </InputGroup>
              <Form.Control
                 type="text"
-                placeholder="[generative-AI-powered] Content about . . ."
+                placeholder="[semantic search] Video about . . ."
                 aria-label="SearchAbout"
                 onChange={this.handleSearchByAboutTextChange.bind(this)}
                 value={this.state.searchByAboutText}

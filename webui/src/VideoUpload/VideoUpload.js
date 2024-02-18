@@ -30,6 +30,10 @@ export class VideoUpload extends Component {
     this.rawFolder = props.rawFolder;
   }
 
+  cleanFileName = (rawFileName) => {
+    return rawFileName.replace(/[^a-zA-Z0-9\-]/g, '_');
+  }
+
   onFileChange = (event) => {
     this.setState({
       selectedVideoFiles: event.target.files,
@@ -57,7 +61,7 @@ export class VideoUpload extends Component {
           const multipartUpload = await this.s3Client.send(
             new CreateMultipartUploadCommand({
               Bucket: this.bucketName,
-              Key: `${this.rawFolder}/${this.state.selectedVideoFiles[i].name}`,
+              Key: `${this.rawFolder}/${this.cleanFileName(this.state.selectedVideoFiles[i].name)}`,
             }),
           );
 
@@ -78,7 +82,7 @@ export class VideoUpload extends Component {
                 .send(
                   new UploadPartCommand({
                     Bucket: this.bucketName,
-                    Key: `${this.rawFolder}/${this.state.selectedVideoFiles[i].name}`,
+                    Key: `${this.rawFolder}/${this.cleanFileName(this.state.selectedVideoFiles[i].name)}`,
                     UploadId: uploadId,
                     Body: this.state.selectedVideoFiles[i].slice(start, end),
                     PartNumber: j + 1,
@@ -97,7 +101,7 @@ export class VideoUpload extends Component {
           await this.s3Client.send(
             new CompleteMultipartUploadCommand({
               Bucket: this.bucketName,
-              Key: `${this.rawFolder}/${this.state.selectedVideoFiles[i].name}`,
+              Key: `${this.rawFolder}/${this.cleanFileName(this.state.selectedVideoFiles[i].name)}`,
               UploadId: uploadId,
               MultipartUpload: {
                 Parts: uploadResults.map(({ ETag }, i) => ({
@@ -113,7 +117,7 @@ export class VideoUpload extends Component {
           if (uploadId) {
             const abortCommand = new AbortMultipartUploadCommand({
               Bucket: this.bucketName,
-              Key: `${this.rawFolder}/${this.state.selectedVideoFiles[i].name}`,
+              Key: `${this.rawFolder}/${this.cleanFileName(this.state.selectedVideoFiles[i].name)}`,
               UploadId: uploadId,
             });
 
@@ -124,7 +128,7 @@ export class VideoUpload extends Component {
       }else{ // Use simple upload
         const command = new PutObjectCommand({
           Bucket: this.bucketName,
-          Key: `${this.rawFolder}/${this.state.selectedVideoFiles[i].name}`,
+          Key: `${this.rawFolder}/${this.cleanFileName(this.state.selectedVideoFiles[i].name)}`,
           Body: this.state.selectedVideoFiles[i],
         });
     

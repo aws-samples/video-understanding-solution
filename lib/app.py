@@ -2,7 +2,7 @@
 import os
 
 from aws_cdk import ( 
-    App, Environment
+    App, Environment, Tags
 )
 
 from video_understanding_solution_stack import VideoUnderstandingSolutionStack
@@ -23,9 +23,10 @@ except AssertionError:
 
 
 app = App()
-VideoUnderstandingSolutionStack(app, "VideoUnderstandingStack", env=Environment(
+vus_main_stack = VideoUnderstandingSolutionStack(app, "VideoUnderstandingStack", env=Environment(
     account=account,
     region=region
 ))
+Tags.of(vus_main_stack).add("Application", "VideoUnderstandingSolution")
 
 app.synth()

@@ -36,12 +36,7 @@ Session = sessionmaker(bind=engine)
 session = Session()
     
 def handler(event, context):
-    print("received event:")
-    print(event)
-
     video_s3_path = event["videoS3Path"]
-    
-    print(video_s3_path)
 
     # Get the name of the video along with its folder location from the raw_folder.
     video_name = '/'.join(video_s3_path.split('/')[1:]) #os.path.basename(video_s3_path)

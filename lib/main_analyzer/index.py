@@ -52,11 +52,7 @@ Base = declarative_base()
 Session = sessionmaker(bind=engine)  
 session = Session()
 
-print("1")
-
 def handler():
-    print("handler called")
-
     video_name = os.path.basename(video_s3_path)
     video_path= '/'.join(video_s3_path.split('/')[1:])
 
@@ -64,19 +60,12 @@ def handler():
 
     try:
         wait_for_rekognition_label_detection(labels_job_id=labels_job_id, sort_by='TIMESTAMP')
-        print("waiting rekognition visual done")
         wait_for_rekognition_text_detection(texts_job_id=texts_job_id)
-        print("waiting rekognition text done")
         wait_for_transcription_job(transcription_job_name=transcription_job_name)
-        print("waiting done")
         response = analyze_video(labels_job_id=labels_job_id, texts_job_id=texts_job_id, video_transcript_s3_path=video_transcript_s3_path)
-        print("analyzing done")
         store_summary_result(summary=response['summary'], video_name=video_name, video_path=video_path)
-        print("summary store done")
         store_sentiment_result(sentiment_string=response['sentiment'], video_name=video_name, video_path=video_path)
-        print("sentiment store done")
         store_video_script_result(video_script=response['video_script'], video_name=video_name, video_path=video_path)
-        print("chunk store done")
     except Exception as err:
         print(f"Unexpected {err=}, {type(err)=}")
         raise
@@ -115,12 +104,7 @@ def store_summary_result(summary, video_name, video_path):
     session.execute(update_stmt)
     session.commit()
 
-
-    print("summary embedding stored")
-
 def store_sentiment_result(sentiment_string, video_name, video_path):
-    print("sentiment string is")
-    print(sentiment_string)
     # Extract entities and sentiment from the string
     entities_dict = {}
     entity_regex = r"\n*([^|\n]+?)\|\s*(positive|negative|neutral|mixed|N\/A)\s*\|([^|\n]+?)\n"
@@ -132,8 +116,6 @@ def store_sentiment_result(sentiment_string, video_name, video_path):
             "sentiment": sentiment,
             "reason": reason
         }
-    print("entities dict")
-    print(entities_dict)
 
     s3.put_object(
         Body="\n".join(f"{e}|{s['sentiment']}|{s['reason']}" for e, s in entities_dict.items()), 
@@ -154,9 +136,6 @@ def store_sentiment_result(sentiment_string, video_name, video_path):
     # Store into database
     session.add_all(entities)
     session.commit()
-
-    print("entities done")
-    print(entities_dict)
     
 def store_video_script_result(video_script, video_name, video_path):
     s3.put_object(
@@ -168,8 +147,6 @@ def store_video_script_result(video_script, video_name, video_path):
     # Chunking the video script for storage in DB while converting them to embedding
     video_script_length = len(video_script)
     number_of_chunks = math.ceil( (video_script_length + 1) / video_script_storage_chunk_size )
-    print("num chunks video script storage")
-    print(number_of_chunks)
 
     chunks = []
     for chunk_number in range(0, number_of_chunks):
@@ -194,8 +171,6 @@ def store_video_script_result(video_script, video_name, video_path):
         while(not call_done):
             try:
                 response = bedrock.invoke_model(body=body, modelId=embedding_model_id)
-                print("embedding response")
-                print(response)
                 call_done = True
             except ThrottlingException:
                 print("Amazon Bedrock throttling exception")
@@ -229,24 +204,21 @@ def analyze_video(labels_job_id, texts_job_id, video_transcript_s3_path):
     return response
 
 def wait_for_rekognition_label_detection(labels_job_id, sort_by):
+    getObjectDetection = rekognition.get_label_detection(JobId=labels_job_id, SortBy=sort_by)
+    while(getObjectDetection['JobStatus'] == 'IN_PROGRESS'):
+        time.sleep(5)
         getObjectDetection = rekognition.get_label_detection(JobId=labels_job_id, SortBy=sort_by)
-        while(getObjectDetection['JobStatus'] == 'IN_PROGRESS'):
-            time.sleep(5)
-            print('.', end='')
-            getObjectDetection = rekognition.get_label_detection(JobId=labels_job_id, SortBy=sort_by)
 
 def wait_for_rekognition_text_detection(texts_job_id):
     getTextDetection = rekognition.get_text_detection(JobId=texts_job_id)
     while(getTextDetection['JobStatus'] == 'IN_PROGRESS'):
         time.sleep(5)
-        print('.', end='')
         getTextDetection = rekognition.get_text_detection(JobId=texts_job_id)
 
 def wait_for_transcription_job(transcription_job_name):
     getTranscription = transcribe.get_transcription_job(TranscriptionJobName=transcription_job_name)
     while(getTranscription ["TranscriptionJob"]["TranscriptionJobStatus"] == 'IN_PROGRESS'):
         time.sleep(5)
-        print('.', end='')
         getTranscription = transcribe.get_transcription_job(TranscriptionJobName=transcription_job_name)
 
 def extract_visual_scenes(scenes, getObjectDetection):
@@ -565,7 +537,7 @@ class VideoAnalyzer(ABC):
             "Now your job is to list the entities you found in the video, their sentiment [positive, negative, mixed, neutral], and the reason.\n" \
             "Entities can be a person, company, country, concept, brand, terms, or anything where audience may be interested in knowing the trend.\n" \
             "For person or individual, DO NOT give sentiment rating. Put N/A for the sentiment and reason fields.\n" \
-            "Your answer MUST consist ONLY pairs of entity,sentiment, and reason with | as delimiter. Follow the below format.\n\n" \
+            "Your answer MUST consist ONLY pairs of entity,sentiment, and reason with | as delimiter. Reason MUST justify strongly about the sentiment. Follow the below format.\n\n" \
             "Entities:\n" \
             "mathematic|negative|This video tells an interview with primary school grader. The kid is really afraid of mathematics as his grade is always struggling.\n" \
             "Rudy|N/A|Rudy is the interviewee's friend. No sentiment score is provided for person/individual.\n" \
@@ -608,7 +580,7 @@ class VideoAnalyzer(ABC):
                     "Now your job is to list the entities you found in the video, their sentiment [positive, negative, mixed, neutral], and reason.\n" \
                     "Entities can be person, company, country, concept, brand, terms, or anything where audience may be interested in knowing the trend.\n" \
                     "For person or individual, DO NOT give sentiment rating. Put N/A for the sentiment and reason fields.\n" \
-                    "Your answer MUST consist ONLY pairs of entity, sentiment, and reason with | as delimiter. NO reasoning. Follow the below format.\n\n" \
+                    "Your answer MUST consist ONLY pairs of entity, sentiment, and reason with | as delimiter. Reason MUST justify strongly about the sentiment. Follow the below format.\n\n" \
                     "Entities:\n" \
                     "mathematic|negative|This video tells an interview with primary school grader. The kid is really afraid of mathematics as his grade is always struggling.\n" \
                     "Rudy|N/A|Rudy is the interviewee's friend. No sentiment score is provided for person/individual.\n" \
@@ -630,7 +602,7 @@ class VideoAnalyzer(ABC):
                     "Now your job is to list the entities you found in the video, their sentiment [positive, negative, mixed, neutral], and reason.\n" \
                     "Entities can be person, company, country, concept, brand, terms, or anything where audience may be interested in knowing the trend.\n" \
                     "For person or individual, DO NOT give sentiment rating. Put N/A for the sentiment and reason fields.\n" \
-                    "Your answer MUST consist ONLY pairs of entity, sentiment, and reason with | as delimiter. Follow the below format.\n\n" \
+                    "Your answer MUST consist ONLY pairs of entity, sentiment, and reason with | as delimiter. Reason MUST justify strongly about the sentiment. Follow the below format.\n\n" \
                     "Entities:\n" \
                     "mathematic|negative|This video tells an interview with primary school grader. The kid is really afraid of mathematics as his grade is always struggling.\n" \
                     "Rudy|N/A|Rudy is the interviewee's friend. No sentiment score is provided for person/individual.\n" \
@@ -654,7 +626,7 @@ class VideoAnalyzer(ABC):
                     "Now your job is to list the entities you found in the whole video so far, their sentiment [positive, negative, mixed, neutral], and reason.\n" \
                     "Entities can be person, company, country, concept, brand, terms, or anything where audience may be interested in knowing the trend.\n" \
                     "For person or individual, DO NOT give sentiment rating. Put N/A for the sentiment and reason fields.\n" \
-                    "Your answer MUST consist ONLY pairs of entity, entiment, and reason with | as delimiter. Follow the below format.\n\n" \
+                    "Your answer MUST consist ONLY pairs of entity, entiment, and reason with | as delimiter. Reason MUST justify strongly about the sentiment. Follow the below format.\n\n" \
                     "Entities:\n" \
                     "mathematic|negative|This video tells an interview with primary school grader. The kid is really afraid of mathematics as his grade is always struggling.\n" \
                     "Rudy|N/A|Rudy is the interviewee's friend. No sentiment score is provided for person/individual.\n" \
@@ -668,8 +640,6 @@ class VideoAnalyzer(ABC):
                     
                     chunk_sentiment = self.call_llm(prompt)
                     self.video_rolling_sentiment = chunk_sentiment
-        print("video rolling sentiment")
-        print(self.video_rolling_sentiment)
                 
         return self.video_rolling_sentiment
       
@@ -701,9 +671,6 @@ class VideoAnalyzerBedrock(VideoAnalyzer):
     }
   
     def call_llm(self, prompt, temperature=None, top_k=None, stop_sequences=[]):
-        print("Prompt to LLM")
-        print(prompt.replace("\n",""))
-
         self.llm_parameters['prompt'] = f"\n\nHuman:{prompt}\n\nAssistant:"
         if temperature is not None:
             self.llm_parameters['temperature'] = temperature
@@ -726,8 +693,6 @@ class VideoAnalyzerBedrock(VideoAnalyzer):
                 raise e
 
         response = json.loads(bedrock_response.get("body").read())["completion"]
-        print("Response from LLM")
-        print(response)
         return response
 
 # Legacy
@@ -764,5 +729,4 @@ class VideoAnalyzerSageMaker(VideoAnalyzer):
 
 
 if __name__ == "__main__":
-    print("called")
     handler()
