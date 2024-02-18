@@ -33,38 +33,40 @@ const REGION = awsExports.aws_cognito_region;
 const COGNITO_ID = `cognito-idp.${REGION}.amazonaws.com/${awsExports.aws_user_pools_id}`;
 
 function App({ signOut, user }: WithAuthenticatorProps) {
-  const getCredentials = async () => {
-    const tokens = (await fetchAuthSession()).tokens;
-    let idToken = tokens.idToken.toString();
+  const getTs = async () => {
+    return (await fetchAuthSession()).tokens;
+  }
+
+  const getCredentials = async (ts) => {
+    //const t = (await fetchAuthSession()).tokens;
+    let idT = (await ts).idToken.toString();
 
     const cognitoidentity = new CognitoIdentityClient({
       credentials: fromCognitoIdentityPool({
         clientConfig: { region: awsExports.aws_cognito_region },
         identityPoolId: awsExports.aws_cognito_identity_pool_id,
         logins: {
-          [COGNITO_ID]: idToken,
+          [COGNITO_ID]: idT,
         },
       }),
     });
-    const credentials = await cognitoidentity.config.credentials();
-
-    return credentials;
+    return await cognitoidentity.config.credentials();
   };
 
-  var c = getCredentials();
-
+  const ts = getTs();
+  const crs = getCredentials(ts);
   const s3Client = new S3Client({
     region: REGION,
-    credentials: c,
+    credentials: crs,
   });
 
   const bedrockClient = new BedrockRuntimeClient({
     region: REGION,
-    credentials: c,
+    credentials: crs,
   });
 
   return (
-    <div className="App" user={user}>
+    <div className="App" user={user} key="app-root">
       <Navbar expand="lg" className="bg-body-tertiary">
         <Container>
           <Navbar.Brand href="#">Video Understanding Solution</Navbar.Brand>
@@ -100,6 +102,9 @@ function App({ signOut, user }: WithAuthenticatorProps) {
                   videoScriptFolder={awsExports.video_script_folder}
                   entitySentimentFolder={awsExports.entity_sentiment_folder}
                   transcriptionFolder={awsExports.transcription_folder}
+                  restApiUrl={awsExports.rest_api_url}
+                  videosApiResource={awsExports.videos_api_resource}
+                  cognitoTs={ts}
                 ></VideoTable>
               </Col>
             </Row>

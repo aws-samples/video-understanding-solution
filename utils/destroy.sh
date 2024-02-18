@@ -1,10 +1,8 @@
 #!/bin/bash
 
-if [ ! -d "venv" ]; then
-    virtualenv -p python3 venv
+if [ -d "venv" ]; then
+    source venv/bin/activate
 fi
-
-source venv/bin/activate
 
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
@@ -28,4 +26,6 @@ export CDK_DEPLOY_REGION=$region
 
 cdk destroy --context email="placeholder"
 
-deactivate
+if [ -d "venv" ]; then
+    deactivate
+fi

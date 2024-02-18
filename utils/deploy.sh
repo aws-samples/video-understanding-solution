@@ -1,10 +1,8 @@
 #!/bin/bash
 
-if [ ! -d "venv" ]; then
-    virtualenv -p python3 venv
+if [ -d "venv" ]; then
+    source venv/bin/activate
 fi
-
-source venv/bin/activate
 
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
@@ -31,8 +29,10 @@ export CDK_DEPLOY_REGION=$region
 
 npm --prefix ./webui  install ./webui
 
-cd webui && zip -r ui_repo.zip src package.json package-lock.json amplify.yml public && cd ..
+cd webui && find  . -name 'ui_repo*.zip' -exec rm {} \; && zip -r "ui_repo$(date +%s).zip" src package.json package-lock.json amplify.yml public && cd ..
 
 cdk deploy --outputs-file ./deployment-output.json --context email=$email
 
-deactivate
+if [ -d "venv" ]; then
+    deactivate
+fi

@@ -18,7 +18,8 @@
     "react-scripts": "5.0.1",
     "web-vitals": "^2.1.4",
     "@svgr/webpack": "^8.1.0",
-    "postcss": "^8.4.33"
+    "postcss": "^8.4.33",
+    "react-datepicker": "^6.1.0"
   },
   "overrides": {
     "@svgr/webpack": "$@svgr/webpack",

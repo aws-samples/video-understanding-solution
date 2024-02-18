@@ -1,6 +1,6 @@
-boto3>=1.34.11
-awscli>=1.32.11
-botocore>=1.34.11
 psycopg2-binary>=2.9.9
 SQLAlchemy>=2.0.26
+boto3>=1.28.57
+awscli>=1.29.57
+botocore>=1.31.57
 pgvector>=0.2.5

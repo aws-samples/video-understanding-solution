@@ -1,5 +1,4 @@
 /* eslint-disable */
-
 export default {
     "aws_project_region": "PLACEHOLDER_REGION",
     "aws_cognito_identity_pool_id": "PLACEHOLDER_IDENTITY_POOL_ID",
@@ -13,4 +12,8 @@ export default {
     "transcription_folder": "PLACEHOLDER_TRANSCRIPTION_FOLDER",
     "entity_sentiment_folder": "PLACEHOLDER_ENTITY_SENTIMENT_FOLDER",
     "summary_folder": "PLACEHOLDER_SUMMARY_FOLDER",
+    "rest_api_url": "PLACEHOLDER_REST_API_URL",
+    "videos_api_resource": "PLACEHOLDER_VIDEOS_API_RESOURCE"
 }
+
+

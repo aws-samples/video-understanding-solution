@@ -9,6 +9,7 @@ __pycache__
 # CDK asset staging directory
 .cdk.staging
 cdk.out
+cdk.context.json
 
 .DS_STORE
 deployment-output.json
@@ -31,9 +32,8 @@ amplify-gradle-config.json
 amplifytools.xcconfig
 .secret-*
 
-ui_repo.zip
+ui_repo*.zip
 banditreport.txt
 semgrepreport.txt
 semgreplog.txt
 npmauditreport.json
-
