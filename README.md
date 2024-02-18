@@ -2,11 +2,13 @@
 
 ## Introduction
 
-This is a deployable solution which can help save your time in understanding the videos you have without having to watch every video. This solution automatically generate AI-powered summary of each video uploaded to your Amazon Simple Storage Service (S3) bucket. Not only that, it also allows you to ask questions about the video in a UI chatbot experience, like "How many people are in this video", "At which seconds does it talk about company's vision?". It can extract information from visual scenes, audio, and visible text in the video
+This is a deployable solution which can help save your time in understanding the videos you have without having to watch every video. This solution automatically generate AI-powered summary and entities extraction of each video uploaded to your Amazon Simple Storage Service (S3) bucket. Not only that, it also allows you to ask questions about the video in a UI chatbot experience, like "How many people are in this video", "At which seconds does it talk about company's vision?". You can also use the search filter to search for videos using generative-AI-powered content/meaning similarity e.g. "video about Amazon's history". This solution extracts information from visual scenes, audio, and visible text in the video. 
 
-You can upload videos to your S3 bucket by using AWS console, CLI, SDK, or other means (e.g. via AWS Transfer Family). This solution will automatically trigger processes by Amazon Rekognition and Amazon Transcribe to extract the visual scenes and texts and the audio transcription. This combined information is used to generate the summary as powered by generative AI with Amazon Bedrock. The UI chatbot also uses Amazon Bedrock to allows you to ask questions about the videos. Refer to the diagram below on the architecture.
+You can upload videos to your S3 bucket by using AWS console, CLI, SDK, or other means (e.g. via AWS Transfer Family). This solution will automatically trigger processes by Amazon Rekognition and Amazon Transcribe to extract the visual scenes and texts and the audio transcription. This combined information is used to generate the summary and entities extraction as powered by generative AI with Amazon Bedrock. The UI chatbot also uses Amazon Bedrock to allows you to ask questions about the videos. The summaries, entities, and combined extracted information are stored in S3 bucket, available to be used for further custom analytics. Refer to the diagram below on the architecture.
 
 ![Architecture](./assets/architecture.jpg)
+
+Note that the architecture diagram may not represent all the components and relations for readability. The Amazon Aurora PostgreSQL database is deployed in Amazon VPC with isolated subnet spanning across 3 availability zones. The Fargate task for analysis, the video search Lambda function, and the preprocessing Lambda function are all deployed in the VPC with private subnet.
 
 Refer to the Deployment section below on how to deploy it to your own AWS account. Refer to the Use section on how to use it.
 
@@ -16,7 +18,7 @@ Refer to the Deployment section below on how to deploy it to your own AWS accoun
 
 Here are prerequisites for deploying this solution with AWS CDK:
 
-1. AWS account with Amazon Bedrock model access enabled for Claude and Titan Embeddings G1 - Text. Follow the steps in https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html#add-model-access to enable those models and make sure the region is correct.
+1. AWS account with Amazon Bedrock model access enabled for Claude Instant and Titan Embeddings G1 - Text. Follow the steps in https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html#add-model-access to enable those models and make sure the region is correct.
 2. Make 3.82 or above in your environment
 3. AWS IAM credentials with sufficient permission for deploying this solution configured in your environment. See https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html for credentials setup.
 4. AWS CLI 2.15.5 or above / 1.29.80 or above. Follow https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html for installation.
@@ -32,8 +34,6 @@ To automatically install item 4-11 of those prerequisites run. `make prepare`
 
 The `make prepare` utility is currently supported only for MacOS Ventura, Amazon Linux 2, and Amazon Linux 2023 operating systems.
 
-NOTE: Currently those packages need to be installed inside virtual environment with name "venv" in the folder where this repository resides. 
-
 ### Deploy
 
 **IMPORTANT**
@@ -45,24 +45,24 @@ Follow the steps below for deploying this solution from your current environment
 
 1. Make sure that all prerequisites are met. Please refer to the [Prerequisites](#prerequisites) section above.
 
-2. Run `make bootstrap_and_deploy` and enter an email address and the region to deploy when prompted. 
+2. Run `make bootstrap_and_deploy` and enter an email address and the region to deploy when prompted. Make sure the email address is valid to receive the login credentials.
 
-3. [Optional] For second or later redeployment, run `make deploy` instead.
+3. [Optional] For second or later redeployment, run `make deploy` instead. Note that any change to the UI (under "webui" folder) is not redeployed with `make deploy`. For UI changes you can push them to the deployed CodeCommit repository directly or run `make destroy` followed by `make deploy`.
 
 
 ## Use
 
-After a successful deployment, the email address that you inputted during deployment should receive an email with temporary password and the web UI portal URL. Make sure the deployment is completed before going to the URL. Visit the URL, use the email address as username, and input the temporary password. It should lead you to password reset dialog. After a successful sign-in, you should be able to see the page that will display your videos.
+After a successful deployment, the email address that you inputted during deployment should receive an email with temporary password and the web UI portal URL. Make sure the deployment is completed before going to the URL It can take 15 minutes or so after you receive the email until the deployment completion. Visit the URL, use the email address as username, and input the temporary password. It should lead you to password reset dialog. After a successful sign-in, you should be able to see the page that will display your uploaded videos.
 
-You can upload videos into the S3 bucket that this solution deployed. Upload the videos into the "raw" folder (create one if not already exist). It will automatically trigger asynchronous task. Wait for few minutes for the task to finish. The resulted analysis will be displayed in the web UI portal.
-
+You can upload videos into the S3 bucket using the UI. Or you can upload them straight to the S3 bucket using other means and folder "source" as instructed in the UI. Uploaded videos will automatically trigger asynchronous task. Wait for few minutes for the task to finish. The resulted analysis will be displayed in the web UI portal. It will also be stored in S3 under folder "summary", "entities", "audio_transcript" (the formatted transcription result), and "video_timeline" (the combined extracted video raw information).
+ 
 In the Web UI portal, you can search for videos in your S3 bucket. For each video found, you can view the video, see its summary, see the extracted information by the seconds from Amazon Rekognition and Amazon Transcribe, and ask the chatbot about the video e.g. "How many people are in this video". The chatbot is equipped with memory for the current conversation, so the user can have a context-aware conversation with the bot.
 
 ## Limitations
 
-1. Currently only .mp4 video files are supported
-2. This solution is only tested on English videos
-3. Only videos less than 15 minutes are supported for now.
+1. Currently only .mp4/.MP4 video files are supported
+2. This solution is only tested on English videos.
+3. Videos under 15 minutes work best. Longer video currently may have higher chat reply latency.
 
 ## Removal
 To remove the solution from your AWS account, run `make destroy` and specify the region.

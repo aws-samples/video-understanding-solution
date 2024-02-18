@@ -65,12 +65,12 @@ export class VideoTable extends Component {
     // Construct filter
     var params = `?page=${page.toString()}&`
     if(this.state.searchByNameText != ""){
-      params += `video_name_starts_with=${encodeURI(this.state.searchByNameText)}&`
+      params += `videoNameStartsWith=${encodeURI(this.state.searchByNameText)}&`
     }
     if(this.state.searchByStartDate != null && this.state.searchByStartDate != null ){
       const startDateString = this.state.searchByStartDate.toISOString()
       const endDateString = this.state.searchByEndDate.toISOString()
-      params += `uploaded_between=${encodeURI(startDateString + "|" + endDateString)}&`
+      params += `uploadedBetween=${encodeURI(startDateString + "|" + endDateString)}&`
     }
     if(this.state.searchByAboutText != ""){
       params += `about=${encodeURI(this.state.searchByAboutText)}`
@@ -136,7 +136,7 @@ export class VideoTable extends Component {
     }
 
     // If there is a next page indicated in the API call return, then either add a new page in pagination bar or just update existing page metadata
-    if ("next_page" in responseBody){
+    if ("nextPage" in responseBody){
       pages[page+1] = {
         displayName: (page + 2).toString(),
         active: false,
@@ -169,7 +169,12 @@ export class VideoTable extends Component {
     });
     try {
       const response = await this.s3Client.send(command);
-      video.entities = await response.Body.transformToString();
+      const rawEntities = await response.Body.transformToString();
+      video.entities = []
+      rawEntities.split("\n").forEach(entity => {
+        const data = entity.split("|")
+        video.entities.push(data)
+      })
     } catch (err) {
       console.log(err)
     }
@@ -234,9 +239,9 @@ export class VideoTable extends Component {
   async retrieveAnswerForShortVideo(video, systemPrompt){
     var [videoScriptPrompt, chatPrompt, closingPrompt] = ["","",""]
 
-    videoScriptPrompt += "Below is the video script with information about the voice heard in the video, the visual scenes seen, and the visual text visible."
+    videoScriptPrompt += "Below is the video timeline with information about the voice heard in the video, the visual scenes seen, and the visual text visible."
     videoScriptPrompt += "The numbers on the left represents the seconds into the video where the information was extracted.\n"
-    videoScriptPrompt += `<VideoScript>\n${video.videoScript}</VideoScript>\n\n`
+    videoScriptPrompt += `<VideoTimeline>\n${video.videoScript}</VideoTimeline>\n\n`
 
     // If the chat history is not too long, then include the whole history in the prompt
     // Otherwise, use the summary + last chat instead.
@@ -255,7 +260,7 @@ export class VideoTable extends Component {
         }
       }
     }else{ // If the chat history is too long, so that we include the summary of the chats + last chat only.
-      chatPrompt += "You had a conversation with a user about that video script as summarized below.\n"
+      chatPrompt += "You had a conversation with a user about that video as summarized below.\n"
       chatPrompt += `<ChatSummary>\n${video.chatSummary}\n</ChatSummary>\n`
       chatPrompt += "Now the user comes back with a reply below.\n"
       chatPrompt += `<Question>\n${video.chats[video.chats.length - 1].text}\n</Question>\n`
@@ -292,24 +297,24 @@ export class VideoTable extends Component {
       var [videoScriptPrompt, chatPrompt, instructionPrompt, partialAnswerPrompt] = ["","","",""]
 
       // Construct the prompt containing the video script (the text representation of the current part of the video)
-      videoScriptPrompt += "The video script has information about the voice heard in the video, the visual scenes seen, and the visual text visible. "
+      videoScriptPrompt += "The video timeline has information about the voice heard in the video, the visual scenes seen, and the visual text visible. "
       videoScriptPrompt += "The numbers on the left represents the seconds into the video where the information was extracted.\n"
-      videoScriptPrompt += `Because the video is long, the video script is split into ${numberOfFragments} parts. `
+      videoScriptPrompt += `Because the video is long, the video timeline is split into ${numberOfFragments} parts. `
       if (currentFragment == numberOfFragments){
-        videoScriptPrompt += "Below is the last part of the video script.\n"
+        videoScriptPrompt += "Below is the last part of the video timeline.\n"
       }else if (currentFragment == 1){
-        videoScriptPrompt += "Below is the first part of the video script.\n"
+        videoScriptPrompt += "Below is the first part of the video timeline.\n"
       }else{
-        videoScriptPrompt += `Below is the part ${currentFragment.toString()} out of ${numberOfFragments} of the video script.\n`
+        videoScriptPrompt += `Below is the part ${currentFragment.toString()} out of ${numberOfFragments} of the video timeline.\n`
       }
       
       // The video script part
       const currentVideoScriptFragment = video.videoScript.substring((currentFragment - 1)*this.maxCharactersForVideoScript, currentFragment*this.maxCharactersForVideoScript)
-      videoScriptPrompt += `<VideoScript>\n${currentVideoScriptFragment}\n</VideoScript>\n\n`
+      videoScriptPrompt += `<VideoTimeline>\n${currentVideoScriptFragment}\n</VideoTimeline>\n\n`
       
       // Add the conversation between user and bot for context
       if (video.chatLength <= this.maxCharactersForChat || video.chatSummary == ""){ 
-        chatPrompt += "You had a conversation with a user as below. Your previous answers may be based on the knowledge of the whole video script, not only part of it.\n"
+        chatPrompt += "You had a conversation with a user as below. Your previous answers may be based on the knowledge of the whole video timeline, not only part of it.\n"
         chatPrompt += "<ChatSummary>\n"
         for (const i in video.chats){
           if (video.chats[i].actor == "You"){
@@ -320,7 +325,7 @@ export class VideoTable extends Component {
         }
         chatPrompt += "\n</ChatSummary>\n\n"
       }else{ // If the chat history is too long, so that we include the summary of the chats + last chat only.
-        chatPrompt += "You had a conversation with a user as summarized below. Your previous answers may be based on the knowledge of the whole video script, not only part of it.\n"
+        chatPrompt += "You had a conversation with a user as summarized below. Your previous answers may be based on the knowledge of the whole video timeline, not only part of it.\n"
         chatPrompt += `<ChatSummary>\n${video.chatSummary}</ChatSummary>\n`
         chatPrompt += "Now the user comes back with a reply below.\n"
         chatPrompt += `<Question>\n${video.chats[video.chats.length - 1].text}\n</Question>\n\n`
@@ -335,11 +340,11 @@ export class VideoTable extends Component {
       if (currentFragment == (numberOfFragments + 1)){
         instructionPrompt += "Now, since there is no more video part left, provide your final answer directly without XML tag."
       }else{
-        instructionPrompt += "When answering the question, do not use XML tags and do not mention about video script, chat summary, or partial answer.\n"
+        instructionPrompt += "When answering the question, do not use XML tags and do not mention about video timeline, chat summary, or partial answer.\n"
         instructionPrompt += "If you have the final answer already, WRITE |BREAK| at the very end of your answer.\n"
-        instructionPrompt += "If you stil need the next part to come with final answer, then write any partial answer based on the current <VideoScript>, <ChatSummary>, <Question> if any, and <PreviousPartialAnswer>.\n" 
-        instructionPrompt += "This partial answer will be included when we ask you again right after this by giving the video script for the next part, so that you can use the current partial answer.\n"
-        instructionPrompt += `For question that needs you to see the whole video such as "is there any?", "does it have", "is it mentioned", DO NOT provide final answer until we give you all ${numberOfFragments} parts of the video script.\n`
+        instructionPrompt += "If you stil need the next part to come with final answer, then write any partial answer based on the current <VideoTimeline>, <ChatSummary>, <Question> if any, and <PreviousPartialAnswer>.\n" 
+        instructionPrompt += "This partial answer will be included when we ask you again right after this by giving the video timeline for the next part, so that you can use the current partial answer.\n"
+        instructionPrompt += `For question that needs you to see the whole video such as "is there any?", "does it have", "is it mentioned", DO NOT provide final answer until we give you all ${numberOfFragments} parts of the video timeline.\n`
       }
       instructionPrompt += "\n\nAssistant:"
 
@@ -377,8 +382,8 @@ export class VideoTable extends Component {
 
     this.addChatWaitingSpinner(video)
 
-    var systemPrompt = "\n\nHuman: You are an expert in analyzing video and you can answer questions about the video given the video script. Answer in the same language as the question from user.\n"
-    systemPrompt += "Do not quote the whole video script row when answering. Assume the user is not aware of the video script. Also if you do not know, say do not know. Do not make up wrong answers.\n\n"
+    var systemPrompt = "\n\nHuman: You are an expert in analyzing video and you can answer questions about the video given the video timeline. Answer in the same language as the question from user.\n"
+    systemPrompt += "Do not quote the whole video timeline row when answering. Assume the user is not aware of the video timeline. Also if you do not know, say do not know. Do not make up wrong answers.\n\n"
    
     if(video.videoScript.length < this.maxCharactersForSingleLLMCall){
       await this.retrieveAnswerForShortVideo(video, systemPrompt) 
@@ -482,6 +487,18 @@ export class VideoTable extends Component {
     var [videos, pages] = await this.fetchVideos(0)
     this.setState({videos: videos, pages: pages})
   }
+
+  renderEntities(video, videoIndex){
+    return video.entities.map((entity, i) => {
+      return (
+        <Row key={`video-${videoIndex}-entity-${i}`}>
+          <Col xs={3} className="left-align-no-bottom-margin">{entity[0]}</Col>
+          <Col xs={1} className="left-align-no-bottom-margin">{entity[1]}</Col>
+          <Col className="left-align-no-bottom-margin">{entity[2]}</Col>
+        </Row>
+      )
+    })
+  }
   
   renderVideoTableBody() {
     // Get which page is active to make sure Accordion keeps open for same page and will auto close for page switch.
@@ -508,7 +525,8 @@ export class VideoTable extends Component {
               <Row>
                 <Col className={video.loaded  ? "" : "d-none"}>
                   <Row><Col><h5 align="left">Entities:</h5></Col></Row>
-                  <Row><Col><p className="paragraph-with-newlines" align="left">{typeof video.entities === "undefined" ? "Entity list is not ready yet" : video.entities }</p></Col></Row>
+                  { typeof video.entities === "undefined" ? <Row><Col><p className="paragraph-with-newlines">Entity list is not ready yet</p></Col></Row> : <Row><Col xs={3}>Entity</Col><Col xs={1}>Sentiment</Col><Col>Reason</Col></Row> }
+                  { typeof video.entities !== "undefined" ? this.renderEntities(video, i) : "" }
                 </Col>
               </Row>
               <Row>

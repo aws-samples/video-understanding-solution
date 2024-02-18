@@ -64,7 +64,7 @@ class Database():
         
         # Create entities table
         # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
-        cur.execute(f"CREATE TABLE {self.entities_table_name} (id bigserial PRIMARY KEY NOT NULL, name VARCHAR(100) NOT NULL, sentiment VARCHAR(20) NOT NULL, video_name varchar(200) NOT NULL REFERENCES {self.video_table_name}(name));")
+        cur.execute(f"CREATE TABLE {self.entities_table_name} (id bigserial PRIMARY KEY NOT NULL, name VARCHAR(100) NOT NULL, sentiment VARCHAR(20), reason text, video_name varchar(200) NOT NULL REFERENCES {self.video_table_name}(name));")
        
         # Create content table
         # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query

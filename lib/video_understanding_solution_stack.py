@@ -36,15 +36,16 @@ visual_scene_detection_confidence_threshold = 98.0
 visual_text_detection_confidence_threshold = 98.0
 raw_folder = "source"
 summary_folder = "summary"
-video_script_folder = "video_script"
+video_script_folder = "video_timeline"
 transcription_root_folder = "audio_transcript"
 transcription_folder = f"{transcription_root_folder}/{raw_folder}"
-entity_sentiment_folder = "sentiment"
+entity_sentiment_folder = "entities"
 database_name = "videos"
 video_table_name = "videos"
 entities_table_name = "entities"
 content_table_name = "content"
 embedding_dimension = 1536
+video_search_by_summary_acceptable_embedding_distance = 0.54 # Using cosine distance
 videos_api_resource = "videos"
 
 BASE_DIR = os.getcwd()
@@ -999,7 +1000,9 @@ class VideoUnderstandingSolutionStack(Stack):
                     'DATABASE_NAME': database_name,
                     'VIDEO_TABLE_NAME': video_table_name,
                     'EMBEDDING_MODEL_ID': embedding_model_id,
-                    'EMBEDDING_DIMENSION': str(embedding_dimension)
+                    'EMBEDDING_DIMENSION': str(embedding_dimension),
+                    'ACCEPTABLE_EMBEDDING_DISTANCE': str(video_search_by_summary_acceptable_embedding_distance),
+                    'DISPLAY_PAGE_SIZE': str(25)
             }
         )
 
@@ -1053,8 +1056,8 @@ class VideoUnderstandingSolutionStack(Stack):
             ],
             request_parameters={
                 "method.request.querystring.page": True,
-                "method.request.querystring.video_name_starts_with": False,
-                "method.request.querystring.uploaded_between": False,
+                "method.request.querystring.videoNameStartsWith": False,
+                "method.request.querystring.uploadedBetween": False,
                 "method.request.querystring.about": False,
             },
             request_validator=videos_search_request_validator
