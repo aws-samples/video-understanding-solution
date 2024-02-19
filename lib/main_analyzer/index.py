@@ -9,7 +9,7 @@ from pgvector.sqlalchemy import Vector
 
 truncation_for_text = 50
 truncation_for_scene = 50
-video_script_storage_chunk_size = 10000 # characters
+video_script_storage_chunk_size = 512 #10000 # characters
 
 config = Config(read_timeout=1000) # Extends botocore read timeout to 1000 seconds
 
@@ -84,15 +84,20 @@ def store_summary_result(summary, video_name, video_path):
     )
 
     # Get summary embedding
-    body = json.dumps(
-        {
-            "inputText": summary,
-        }
-    )
+    #body = json.dumps(
+    #    {
+    #        "inputText": summary,
+    #    }
+    #)
+    body = json.dumps({
+        "texts":[summary],
+        "input_type": "search_document",
+        #"truncate": "LEFT"
+    })
     response = bedrock.invoke_model(body=body, modelId=embedding_model_id)
     # Disabling semgrep rule for checking data size to be loaded to JSON as the source is from Amazon Bedrock
     # nosemgrep: python.aws-lambda.deserialization.tainted-json-aws-lambda.tainted-json-aws-lambda
-    summary_embedding = json.loads(response.get("body").read())["embedding"]
+    summary_embedding = json.loads(response.get("body").read().decode())["embeddings"][0] #["embedding"]
 
     # Store summary in database
     update_stmt = (
@@ -162,11 +167,16 @@ def store_video_script_result(video_script, video_name, video_path):
             chunk_string = chunk_string[chunk_string.index("\n"):] 
         
         # Get the embedding for the chunk
-        body = json.dumps(
-            {
-                "inputText": chunk_string,
-            }
-        )
+        #body = json.dumps(
+        #    {
+        #        "inputText": chunk_string,
+        #    }
+        #)
+        body = json.dumps({
+            "texts":[chunk_string],
+            "input_type": "search_document",
+            #"truncate": "LEFT"
+        })
         call_done = False
         while(not call_done):
             try:
@@ -180,7 +190,7 @@ def store_video_script_result(video_script, video_name, video_path):
 
         # Disabling semgrep rule for checking data size to be loaded to JSON as the source is from Amazon Bedrock
         # nosemgrep: python.aws-lambda.deserialization.tainted-json-aws-lambda.tainted-json-aws-lambda
-        chunk_embedding = json.loads(response.get("body").read())["embedding"]
+        chunk_embedding = json.loads(response.get("body").read().decode())['embeddings'][0] #["embedding"]
         
         # Create database object
         chunks.append(Contents(
@@ -439,7 +449,7 @@ class VideoAnalyzer(ABC):
         self.all_combined_video_script += combined_video_script
   
     def generate_summary(self):
-        prompt_prefix = "You are an expert video analyst who reads a VIDEO TIMELINE and creates summary of the video and why it is interesting.\n" \
+        prompt_prefix = "You are an expert video analyst who reads a VIDEO TIMELINE and creates summary of the video.\n" \
                         "The VIDEO TIMELINE contains the visual scenes, the visual texts, and human voice in the video."
         
         video_script_length = len(self.combined_video_script)
@@ -454,7 +464,7 @@ class VideoAnalyzer(ABC):
           
             prompt = f"{prompt_prefix}\n\n" \
             f"{core_prompt}\n\n" \
-            "Given the VIDEO TIMELINE above, decribe the summary of the video and why it is interesting. DO NOT make up anything you do not know.\n" \
+            "Given the VIDEO TIMELINE above, decribe the summary of the video.\n" \
             "Give the summary directly without any intro.\n" \
             "Summary: "
           
@@ -488,7 +498,7 @@ class VideoAnalyzer(ABC):
                     f"{self.video_rolling_summary}\n\n" \
                     f"The below VIDEO TIMELINE is only for the LAST video part.\n\n" \
                     f"{core_prompt}\n\n" \
-                    "Given the previous summary and the VIDEO TIMELINE above, decribe the summary of the whole video and why it is interesting. DO NOT make up anything you do not know.\n" \
+                    "Given the previous summary and the VIDEO TIMELINE above, decribe the summary of the whole video.\n" \
                     "Give the summary directly without any intro.\n" \
                     "Summary: "
                     
@@ -498,7 +508,7 @@ class VideoAnalyzer(ABC):
                     prompt = f"{prompt_prefix}\n\n" \
                     f"The video has {number_of_chunks} parts. The below VIDEO TIMELINE is only for the first part.\n\n" \
                     f"{core_prompt}\n\n" \
-                    f"Given VIDEO TIMELINE above, decribe the summary of the video so far. DO NOT make up anything you do not know.\n" \
+                    f"Given VIDEO TIMELINE above, decribe the summary of the video so far.\n" \
                     "Summary: "
                     
                     chunk_summary = self.call_llm(prompt)
@@ -510,7 +520,7 @@ class VideoAnalyzer(ABC):
                     f"{self.video_rolling_summary}\n\n" \
                     f"The below VIDEO TIMELINE is only for part {chunk_number} of the video.\n\n" \
                     f"{core_prompt}\n\n" \
-                    "Given the previous summary and the VIDEO TIMELINE above, decribe the summary of the whole video so far. DO NOT make up anything you do not know.\n" \
+                    "Given the previous summary and the VIDEO TIMELINE above, decribe the summary of the whole video so far.\n" \
                     "Summary: "
                     
                     chunk_summary = self.call_llm(prompt)

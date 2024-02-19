@@ -31,7 +31,7 @@ export class VideoUpload extends Component {
   }
 
   cleanFileName = (rawFileName) => {
-    return rawFileName.replace(/[^a-zA-Z0-9\-]/g, '_');
+    return rawFileName.replace(/[^a-zA-Z0-9\-\.]/g, '_');
   }
 
   onFileChange = (event) => {

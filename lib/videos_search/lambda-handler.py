@@ -62,11 +62,16 @@ def handler(event, context):
         videos = videos.filter(Videos.uploaded_at.between(start_param, stop_param))
     if about is not None:
         # Get the embedding for the video topic
-        body = json.dumps(
-            {
-                "inputText": about,
-            }
-        )
+        #body = json.dumps(
+        #    {
+        #        "inputText": about,
+        #    }
+        #)
+        body = json.dumps({
+            "texts":[about],
+            "input_type": "search_query",
+            #"truncate": "LEFT"
+        })
         call_done = False
         while(not call_done):
             try:
@@ -80,7 +85,7 @@ def handler(event, context):
 
         # Disabling semgrep rule for checking data size to be loaded to JSON as the source is from Amazon Bedrock
         # nosemgrep: python.aws-lambda.deserialization.tainted-json-aws-lambda.tainted-json-aws-lambda
-        about_embedding = json.loads(response.get("body").read())["embedding"]
+        about_embedding = json.loads(response.get("body").read().decode())['embeddings'][0] #["embedding"]
 
         videos = videos.filter(Videos.summary_embedding.cosine_distance(about_embedding) < acceptable_embedding_distance)
 

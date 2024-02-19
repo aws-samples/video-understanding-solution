@@ -29,9 +29,9 @@ from aws_cdk.aws_ecr_assets import DockerImageAsset
 from cdk_nag import AwsSolutionsChecks, NagSuppressions
 
 
-#model_id = "anthropic.claude-v2:1"
-model_id = "anthropic.claude-instant-v1"
-embedding_model_id = "amazon.titan-embed-text-v1"
+model_id = "anthropic.claude-v2:1"
+chat_model_id = "anthropic.claude-instant-v1"
+embedding_model_id = "cohere.embed-multilingual-v3"
 visual_scene_detection_confidence_threshold = 98.0
 visual_text_detection_confidence_threshold = 98.0
 raw_folder = "source"
@@ -44,7 +44,7 @@ database_name = "videos"
 video_table_name = "videos"
 entities_table_name = "entities"
 content_table_name = "content"
-embedding_dimension = 1536
+embedding_dimension = 1024
 video_search_by_summary_acceptable_embedding_distance = 0.54 # Using cosine distance
 videos_api_resource = "videos"
 
@@ -666,41 +666,6 @@ class VideoUnderstandingSolutionStack(Stack):
 
         )
 
-        
-        """
-        # Lambda function to run the main video analysis
-        main_analyzer_lambda = _lambda.Function(self, f'MainAnalyzerLambda',
-           handler='index.handler',
-           runtime=_lambda.Runtime.PYTHON_3_12,
-           code=_lambda.Code.from_asset('./lib/main_analyzer', 
-               bundling= BundlingOptions(
-                  image= _lambda.Runtime.PYTHON_3_12.bundling_image,
-                  command= [
-                    'bash',
-                    '-c',
-                    'pip install -r requirements.txt -t /asset-output && cp -au . /asset-output',
-                  ],
-                )),
-           role=main_analyzer_lambda_role,                                    
-           timeout=Duration.minutes(15),
-           memory_size=2048,
-           environment = {
-                'MODEL_ID': model_id,
-                'BUCKET_NAME': video_bucket_s3.bucket_name,
-                "MODEL_ID": model_id,
-                "RAW_FOLDER": raw_folder,
-                "VIDEO_SCRIPT_FOLDER": video_script_folder,
-                "TRANSCRIPTION_FOLDER": transcription_folder,
-                "ENTITY_SENTIMENT_FOLDER": entity_sentiment_folder,
-                "SUMMARY_FOLDER": summary_folder
-           }
-        )
-        """
-
-        #main_analyzer_task = _sfn_tasks.LambdaInvoke(self, "CallMainAnalyzerLambda",
-        #    lambda_function=main_analyzer_lambda,
-        #)
-
         main_analyzer_task = _sfn_tasks.EcsRunTask(self, "CallMainAnalyzer",
             integration_pattern=_sfn.IntegrationPattern.RUN_JOB,
             cluster=ecs_cluster,
@@ -1090,16 +1055,12 @@ class VideoUnderstandingSolutionStack(Stack):
         branch_name = "main"
         webui_path = f"{BASE_DIR}/webui/"
         webui_zip_file_name = [i for i in os.listdir(webui_path) if os.path.isfile(os.path.join(webui_path,i)) and i.startswith("ui_repo")][0]
-        print(webui_zip_file_name)
+
         repo = _codecommit.Repository(
           self,
           "VideoUnderstandingRepo",
           repository_name=repo_name,
           description="CodeCommit repository for the video understanding solution's UI",
-          #code=_codecommit.Code.from_directory(
-          #    directory=webui_path,
-          #    branch=branch_name,
-          #)
           code=_codecommit.Code.from_zip_file(
                 f"{webui_path}{webui_zip_file_name}",
                 branch=branch_name,
@@ -1121,7 +1082,7 @@ class VideoUnderstandingSolutionStack(Stack):
                 "REGION": aws_region,
                 "AMPLIFY_IDENTITYPOOL_ID": identity_pool.ref,
                 "BUCKET_NAME": video_bucket_s3.bucket_name,
-                "MODEL_ID": model_id,
+                "MODEL_ID": chat_model_id,
                 "RAW_FOLDER": raw_folder,
                 "VIDEO_SCRIPT_FOLDER": video_script_folder,
                 "TRANSCRIPTION_FOLDER": transcription_folder.replace("/","\/"),

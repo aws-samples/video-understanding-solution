@@ -539,7 +539,7 @@ export class VideoTable extends Component {
                     <Form.Control
                       type="text"
                       id={("video-" + video.index + "-chat-input")}
-                      placeholder="e.g. How many people are featured in this video?"
+                      placeholder="e.g. Why is this video funny or interesting?"
                       onKeyDown={this.handleChatInputChange.bind(this, video)}
                       disabled={ video.chatWaiting ? true : false }
                     />
