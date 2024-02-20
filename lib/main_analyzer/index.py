@@ -164,7 +164,10 @@ def store_video_script_result(video_script, video_name, video_path):
     
         # So long as this is not the first chunk, remove whatever before first \n since likely the chunk cutting is not done exactly at the \n
         if not is_first_chunk:
-            chunk_string = chunk_string[chunk_string.index("\n"):] 
+            try:
+                chunk_string = chunk_string[chunk_string.index("\n"):] 
+            except:
+                pass
         
         # Get the embedding for the chunk
         #body = json.dumps(
@@ -464,9 +467,9 @@ class VideoAnalyzer(ABC):
           
             prompt = f"{prompt_prefix}\n\n" \
             f"{core_prompt}\n\n" \
-            "Given the VIDEO TIMELINE above, decribe the summary of the video.\n" \
+            "Given the VIDEO TIMELINE above, decribe the summary of the video in paragraph format.\n" \
             "Give the summary directly without any intro.\n" \
-            "Summary: "
+            "Summary:\n"
           
             self.video_rolling_summary = self.call_llm(prompt)
         # When the video is long enough to be divided into multiple chunks to fit within LLM's context length
@@ -483,7 +486,10 @@ class VideoAnalyzer(ABC):
             
                 # So long as this is not the first chunk, remove whatever before first \n since likely the chunk cutting is not done exactly at the \n
                 if not is_first_chunk:
-                    chunk_combined_video_script = chunk_combined_video_script[chunk_combined_video_script.index("\n"):]
+                    try:
+                        chunk_combined_video_script = chunk_combined_video_script[chunk_combined_video_script.index("\n"):]
+                    except:
+                        pass
                     
                 core_prompt = f"The VIDEO TIMELINE has format below.\n" \
                         "timestamp in seconds:scene / text / voice\n" \
@@ -494,13 +500,13 @@ class VideoAnalyzer(ABC):
                 if is_last_chunk:
                     prompt = f"{prompt_prefix}\n\n" \
                     f"The video has {number_of_chunks} parts.\n\n" \
-                    f"Below is the summary of all previous parts of the video::\n\n" \
+                    f"Below is the summary of all previous parts of the video:\n\n" \
                     f"{self.video_rolling_summary}\n\n" \
                     f"The below VIDEO TIMELINE is only for the LAST video part.\n\n" \
                     f"{core_prompt}\n\n" \
-                    "Given the previous summary and the VIDEO TIMELINE above, decribe the summary of the whole video.\n" \
+                    "Given the previous summary and the VIDEO TIMELINE above, decribe the summary of the whole video in paragraph format.\n" \
                     "Give the summary directly without any intro.\n" \
-                    "Summary: "
+                    "Summary:\n"
                     
                     chunk_summary = self.call_llm(prompt)
                     self.video_rolling_summary = chunk_summary
@@ -509,7 +515,7 @@ class VideoAnalyzer(ABC):
                     f"The video has {number_of_chunks} parts. The below VIDEO TIMELINE is only for the first part.\n\n" \
                     f"{core_prompt}\n\n" \
                     f"Given VIDEO TIMELINE above, decribe the summary of the video so far.\n" \
-                    "Summary: "
+                    "Summary:\n"
                     
                     chunk_summary = self.call_llm(prompt)
                     self.video_rolling_summary = chunk_summary
@@ -521,7 +527,7 @@ class VideoAnalyzer(ABC):
                     f"The below VIDEO TIMELINE is only for part {chunk_number} of the video.\n\n" \
                     f"{core_prompt}\n\n" \
                     "Given the previous summary and the VIDEO TIMELINE above, decribe the summary of the whole video so far.\n" \
-                    "Summary: "
+                    "Summary:\n"
                     
                     chunk_summary = self.call_llm(prompt)
                     self.video_rolling_summary = chunk_summary
@@ -572,7 +578,10 @@ class VideoAnalyzer(ABC):
             
                 # So long as this is not the first chunk, remove whatever before first \n since likely the chunk cutting is not done exactly at the \n
                 if not is_first_chunk:
-                    chunk_combined_video_script = chunk_combined_video_script[chunk_combined_video_script.index("\n"):]
+                    try:
+                        chunk_combined_video_script = chunk_combined_video_script[chunk_combined_video_script.index("\n"):]
+                    except:
+                        pass
                     
                 core_prompt = f"The VIDEO TIMELINE has format below.\n" \
                         "timestamp in seconds:scene / text / voice\n" \
