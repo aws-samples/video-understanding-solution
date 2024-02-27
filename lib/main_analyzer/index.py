@@ -15,7 +15,6 @@ config = Config(read_timeout=1000) # Extends botocore read timeout to 1000 secon
 
 rekognition = boto3.client('rekognition')
 transcribe = boto3.client("transcribe")
-#sagemaker = boto3.client("sagemaker-runtime")
 secrets_manager = boto3.client('secretsmanager')
 bedrock = boto3.client(service_name="bedrock-runtime", config=config)
 s3 = boto3.client("s3")
@@ -84,15 +83,9 @@ def store_summary_result(summary, video_name, video_path):
     )
 
     # Get summary embedding
-    #body = json.dumps(
-    #    {
-    #        "inputText": summary,
-    #    }
-    #)
     body = json.dumps({
         "texts":[summary],
         "input_type": "search_document",
-        #"truncate": "LEFT"
     })
     response = bedrock.invoke_model(body=body, modelId=embedding_model_id)
     # Disabling semgrep rule for checking data size to be loaded to JSON as the source is from Amazon Bedrock
@@ -170,15 +163,9 @@ def store_video_script_result(video_script, video_name, video_path):
                 pass
         
         # Get the embedding for the chunk
-        #body = json.dumps(
-        #    {
-        #        "inputText": chunk_string,
-        #    }
-        #)
         body = json.dumps({
             "texts":[chunk_string],
             "input_type": "search_document",
-            #"truncate": "LEFT"
         })
         call_done = False
         while(not call_done):
@@ -337,8 +324,10 @@ class VideoAnalyzer(ABC):
         self.scenes = []
         self.visual_texts = []
         self.transcript = []
-        self.video_script_chunk_size = 300000 # characters
-        self.video_script_chunk_overlap = 1000 # characters
+        self.video_script_chunk_size_for_summary_generation = 100000 # characters
+        self.video_script_chunk_overlap_for_summary_generation = 500 # characters
+        self.video_script_chunk_size_for_entities_extraction = 50000 #10000 # characters
+        self.video_script_chunk_overlap_for_entities_extraction = 500 #200 # characters
         self.scene_similarity_score = 0.5
         self.text_similarity_score = 0.5
         self.video_rolling_summary = ""
@@ -452,36 +441,44 @@ class VideoAnalyzer(ABC):
         self.all_combined_video_script += combined_video_script
   
     def generate_summary(self):
-        prompt_prefix = "You are an expert video analyst who reads a VIDEO TIMELINE and creates summary of the video.\n" \
-                        "The VIDEO TIMELINE contains the visual scenes, the visual texts, and human voice in the video."
+        prompt_prefix = "You are an expert video analyst who reads a Video Timeline and creates summary of the video.\n" \
+                        "The Video Timeline is a text representation of a video.\n" \
+                        "The Video Timeline contains the visual scenes, the visual texts, and human voice in the video.\n" \
+                        "Visual scenes (scene) represents what objects are visible in the video at that second. This can be the objects seen in camera, or objects from a screen sharing, or any other visual scenarios. You can infer how the visualization look like, so long as you are confident.\n" \
+                        "Visual texts (text) are the text visible in the video. It can be texts in real world objects as recorded in video camera, or those from screen sharing, or those from presentation recording, or those from news, movies, or others. \n" \
+                        "Human voice (voice) is the transcription of the video.\n"
         
         video_script_length = len(self.combined_video_script)
 
         # When the video is short enough to fit into 1 chunk
-        if video_script_length <= self.video_script_chunk_size:
+        if video_script_length <= self.video_script_chunk_size_for_summary_generation:
             core_prompt = f"The VIDEO TIMELINE has format below.\n" \
                             "timestamp in seconds:scene / text / voice\n" \
-                            "<VideoTimeline>\n" \
+                            "<Video Timeline>\n" \
                             f"{self.combined_video_script}\n" \
-                            "</VideoTimeline>\n"
+                            "</Video Timeline>\n"
           
             prompt = f"{prompt_prefix}\n\n" \
             f"{core_prompt}\n\n" \
-            "Given the VIDEO TIMELINE above, decribe the summary of the video in paragraph format.\n" \
-            "Give the summary directly without any intro.\n" \
+            "<Task>\n" \
+            "Describe the summary of the video in paragraph format.\n" \
+            "You can make reasonable extrapolation of the actual video given the Video Timeline.\n" \
+            "DO NOT mention 'Video Timeline' or 'video timeline'.\n" \
+            "Give the summary directly without any other sentence.\n" \
+            "</Task>\n" \
             "Summary:\n"
           
-            self.video_rolling_summary = self.call_llm(prompt)
+            self.video_rolling_summary = self.call_llm(prompt, stop_sequences=["<Task>"])
         # When the video is long enough to be divided into multiple chunks to fit within LLM's context length
         else:
-            number_of_chunks = math.ceil( (video_script_length + 1) / (self.video_script_chunk_size - self.video_script_chunk_overlap) )
+            number_of_chunks = math.ceil( (video_script_length + 1) / (self.video_script_chunk_size_for_summary_generation - self.video_script_chunk_overlap_for_summary_generation) )
 
             for chunk_number in range(0, number_of_chunks):
                 is_last_chunk = (chunk_number == (number_of_chunks - 1))
                 is_first_chunk = (chunk_number == 0)
 
-                start = 0 if is_first_chunk else int(chunk_number*self.video_script_chunk_size - self.video_script_chunk_overlap)
-                stop = video_script_length if is_last_chunk else (chunk_number+1)*self.video_script_chunk_size
+                start = 0 if is_first_chunk else int(chunk_number*self.video_script_chunk_size_for_summary_generation - self.video_script_chunk_overlap_for_summary_generation)
+                stop = video_script_length if is_last_chunk else (chunk_number+1)*self.video_script_chunk_size_for_summary_generation
                 chunk_combined_video_script = self.combined_video_script[start:stop]
             
                 # So long as this is not the first chunk, remove whatever before first \n since likely the chunk cutting is not done exactly at the \n
@@ -493,87 +490,111 @@ class VideoAnalyzer(ABC):
                     
                 core_prompt = f"The VIDEO TIMELINE has format below.\n" \
                         "timestamp in seconds:scene / text / voice\n" \
-                        "<VideoTimeline>\n" \
+                        "<Video Timeline>\n" \
                         f"{chunk_combined_video_script}\n" \
-                        "</VideoTimeline>\n"
+                        "</Video Timeline>\n"
                 
                 if is_last_chunk:
                     prompt = f"{prompt_prefix}\n\n" \
                     f"The video has {number_of_chunks} parts.\n\n" \
-                    f"Below is the summary of all previous parts of the video:\n\n" \
-                    f"{self.video_rolling_summary}\n\n" \
-                    f"The below VIDEO TIMELINE is only for the LAST video part.\n\n" \
+                    f"The below Video Timeline is only for the part {chunk_number+1} of the video, which is the LAST part.\n\n" \
                     f"{core_prompt}\n\n" \
-                    "Given the previous summary and the VIDEO TIMELINE above, decribe the summary of the whole video in paragraph format.\n" \
-                    "Give the summary directly without any intro.\n" \
+                    "Below is the summary of all previous part/s of the video:\n\n" \
+                    f"{self.video_rolling_summary}\n\n" \
+                    "<Task>\n" \
+                    "Describe the summary of the whole video in paragraph format.\n" \
+                    "You can make reasonable extrapolation of the actual video given the Video Timeline.\n" \
+                    "DO NOT mention 'Video Timeline' or 'video timeline'.\n" \
+                    "Give the summary directly without any other sentence.\n" \
+                    "</Task>\n" \
                     "Summary:\n"
                     
-                    chunk_summary = self.call_llm(prompt)
+                    chunk_summary = self.call_llm(prompt, stop_sequences=["<Task>"])
                     self.video_rolling_summary = chunk_summary
                 elif is_first_chunk:
                     prompt = f"{prompt_prefix}\n\n" \
-                    f"The video has {number_of_chunks} parts. The below VIDEO TIMELINE is only for the first part.\n\n" \
+                    f"The video has {number_of_chunks} parts. The below Video Timeline is only for the first part.\n\n" \
                     f"{core_prompt}\n\n" \
-                    f"Given VIDEO TIMELINE above, decribe the summary of the video so far.\n" \
+                    "<Task>\n" \
+                    "Describe the summary of the first part of the video in paragraph format.\n" \
+                    "You can make reasonable extrapolation of the actual video given the Video Timeline.\n" \
+                    "DO NOT mention 'Video Timeline' or 'video timeline'.\n" \
+                    "Give the summary directly without any other sentence.\n" \
+                    "</Task>\n" \
                     "Summary:\n"
                     
-                    chunk_summary = self.call_llm(prompt)
+                    chunk_summary = self.call_llm(prompt, stop_sequences=["<Task>"])
                     self.video_rolling_summary = chunk_summary
                 else:
                     prompt = f"{prompt_prefix}\n\n" \
                     f"The video has {number_of_chunks} parts.\n\n" \
-                    f"Below is the summary of all previous parts of the video:\n\n" \
-                    f"{self.video_rolling_summary}\n\n" \
-                    f"The below VIDEO TIMELINE is only for part {chunk_number} of the video.\n\n" \
+                    f"The below Video Timeline is only for part {chunk_number+1} of the video.\n\n" \
                     f"{core_prompt}\n\n" \
-                    "Given the previous summary and the VIDEO TIMELINE above, decribe the summary of the whole video so far.\n" \
+                    "Below is the summary of all previous part/s of the video:\n\n" \
+                    f"{self.video_rolling_summary}\n\n" \
+                    "<Task>\n" \
+                    "Describe the summary of the video so far in paragraph format.\n" \
+                    "In your summary, retain important details from the previous part/s summaries. Your summary MUST include the summary of all parts of the video so far.\n"\
+                    "You can make reasonable extrapolation of the actual video given the Video Timeline.\n" \
+                    "DO NOT mention 'Video Timeline' or 'video timeline'.\n" \
+                    "Give the summary directly without any other sentence.\n" \
+                    "</Task>\n" \
                     "Summary:\n"
                     
-                    chunk_summary = self.call_llm(prompt)
+                    chunk_summary = self.call_llm(prompt, stop_sequences=["<Task>"])
                     self.video_rolling_summary = chunk_summary
 
         return self.video_rolling_summary
     
     def extract_sentiment(self):
-        prompt_prefix = "You are an expert video analyst who reads a VIDEO TIMELINE and extract entities and their associated sentiment from the video.\n" \
-                        "The VIDEO TIMELINE contains the visual scenes, the visual texts, and human voice in the video."
+        prompt_prefix = "You are an expert video analyst who reads a Video Timeline and extract entities and their associated sentiment.\n" \
+                        "The Video Timeline is a text representation of a video.\n" \
+                        "The Video Timeline contains the visual scenes, the visual texts, and human voice in the video.\n" \
+                        "Visual scenes (scene) represents what objects are visible in the video at that second. This can be the objects seen in camera, or objects from a screen sharing, or any other visual scenarios. You can infer how the visualization look like, so long as you are confident.\n" \
+                        "Visual texts (text) are the text visible in the video. It can be texts in real world objects as recorded in video camera, or those from screen sharing, or those from presentation recording, or those from news, movies, or others. \n" \
+                        "Human voice (voice) is the transcription of the video.\n"
+                        
         
         video_script_length = len(self.combined_video_script)
 
         # When the video is short enough to fit into 1 chunk
-        if video_script_length <= self.video_script_chunk_size:
-            core_prompt = f"The VIDEO TIMELINE has format below.\n" \
+        if video_script_length <= self.video_script_chunk_size_for_entities_extraction:
+            core_prompt = f"The Video Timeline has a format below.\n" \
                             "timestamp in seconds:scene / text / voice\n" \
-                            "<VideoTimeline>\n" \
+                            "<Video Timeline>\n" \
                             f"{self.combined_video_script}\n" \
-                            "</VideoTimeline>\n"
+                            "</Video Timeline>\n"
           
             prompt = f"{prompt_prefix}\n\n" \
             f"{core_prompt}\n\n" \
-            "Now your job is to list the entities you found in the video, their sentiment [positive, negative, mixed, neutral], and the reason.\n" \
-            "Entities can be a person, company, country, concept, brand, terms, or anything where audience may be interested in knowing the trend.\n" \
+            f"To help you, here is the summary of the whole video.\n\n{self.video_rolling_summary}\n\n" \
+            "<Task>\n" \
+            "Now your job is to infer and list the entities, their sentiment [positive, negative, mixed, neutral], and the sentiment's reason.\n" \
+            "You will never see the video. This video timeline is the best you get. You can make reasonable extrapolation of the actual video given the Video Timeline.\n" \
+            "Entities can be a person, company, country, concept, brand, or anything where audience may be interested in knowing the trend.\n" \
+            "You MUST ONLY list important entities of interest, not every entity you found.\n" \
             "For person or individual, DO NOT give sentiment rating. Put N/A for the sentiment and reason fields.\n" \
-            "Your answer MUST consist ONLY pairs of entity,sentiment, and reason with | as delimiter. Reason MUST justify strongly about the sentiment. Follow the below format.\n\n" \
+            "Sentiment's reason MUST justify the sentiment. For no meaningful reason, just put N/A for the sentiment's reason.\n" \
+            "Each row of your answer MUST be of this format entity|sentiment|sentiment's reason. Follow the below example.\n\n" \
             "Entities:\n" \
-            "mathematic|negative|This video tells an interview with primary school grader. The kid is really afraid of mathematics as his grade is always struggling.\n" \
-            "Rudy|N/A|Rudy is the interviewee's friend. No sentiment score is provided for person/individual.\n" \
-            "teacher|positive|Despite the kid having not so good grades, he like all his teachers in school as they are all patient.\n" \
-            "playing in classroom|positive|The interviewee tone indicates excitement when telling how he played in classroom.\n" \
-            "examination|mixed|While dreading bad grade put some stress on the kid, he likes the challenge of being tested in the exams.\n\n" \
-            "DO NOT make up anything you do not know.\n" \
-            "STRICTLY FOLLOW the format above.\n" \
-            "Give the entities directly without any intro.\n" \
+            "mathematic|negative|The kid interviewed in the video seems to be really afraid of mathematics as his grade is always struggling.\n" \
+            "Rudy Donna|N/A|Rudy Donna is the interviewee's friend. No sentiment score is provided for person/individual.\n" \
+            "teacher|positive|Despite the kid having not so good grades, he seems to like all his teachers in school as they are all patient.\n" \
+            "extracurricular activities|neutral|N/A.\n" \
+            "examination|mixed|While the interviewee dreads examination, he likes the challenge of it.\n\n" \
+            "STRICTLY FOLLOW the format above. DO NOT mention Video Timeline or video timeline.\n" \
+            "</Task>\n" \
             "Entities:\n"
           
-            self.video_rolling_sentiment = self.call_llm(prompt)
+            self.video_rolling_sentiment = self.call_llm(prompt, temperature=0.8, stop_sequences=["<Task>"])
         else:
-            number_of_chunks = math.ceil( (video_script_length + 1) / (self.video_script_chunk_size - self.video_script_chunk_overlap) )
+            number_of_chunks = math.ceil( (video_script_length + 1) / (self.video_script_chunk_size_for_entities_extraction - self.video_script_chunk_overlap_for_entities_extraction) )
             
             for chunk_number in range(0, number_of_chunks):
                 is_last_chunk = (chunk_number == (number_of_chunks - 1))
                 is_first_chunk = (chunk_number == 0)
-                start = 0 if is_first_chunk else int(chunk_number*self.video_script_chunk_size - self.video_script_chunk_overlap)
-                stop = video_script_length if is_last_chunk else (chunk_number+1)*self.video_script_chunk_size
+                start = 0 if is_first_chunk else int(chunk_number*self.video_script_chunk_size_for_entities_extraction - self.video_script_chunk_overlap_for_entities_extraction)
+                stop = video_script_length if is_last_chunk else (chunk_number+1)*self.video_script_chunk_size_for_entities_extraction
                 chunk_combined_video_script = self.combined_video_script[start:stop]
             
                 # So long as this is not the first chunk, remove whatever before first \n since likely the chunk cutting is not done exactly at the \n
@@ -585,79 +606,91 @@ class VideoAnalyzer(ABC):
                     
                 core_prompt = f"The VIDEO TIMELINE has format below.\n" \
                         "timestamp in seconds:scene / text / voice\n" \
-                        "<VideoTimeline>\n" \
+                        "<Video Timeline>\n" \
                         f"{chunk_combined_video_script}\n" \
-                        "</VideoTimeline>\n"
+                        "</Video Timeline>\n"
                 
                 if is_last_chunk:
                     prompt = f"{prompt_prefix}\n\n" \
-                    f"The video has {number_of_chunks} parts.\n\n" \
-                    "Below are the entities and sentiment you extracted from the previous parts of the video, with reasoning.\n\n" \
-                    f"Entities:\n{self.video_rolling_sentiment}\n\n" \
-                    f"The below VIDEO TIMELINE is only for the LAST video part.\n\n" \
+                    f"The video has {number_of_chunks} parts. The below Video Timeline is only for part {chunk_number+1} of the video, which is the LAST part.\n\n" \
                     f"{core_prompt}\n\n" \
-                    "Now your job is to list the entities you found in the video, their sentiment [positive, negative, mixed, neutral], and reason.\n" \
-                    "Entities can be person, company, country, concept, brand, terms, or anything where audience may be interested in knowing the trend.\n" \
+                    "Below are the entities, sentiment, and reason you extracted from the previous part/s of the video.\n\n" \
+                    f"Entities:\n{self.video_rolling_sentiment}\n\n" \
+                    f"To help you, here is the summary of the whole video.\n\n{self.video_rolling_summary}\n\n" \
+                    "<Task>\n" \
+                    "Now your job is to infer and list the entities, their sentiment [positive, negative, mixed, neutral], and the sentiment's reason.\n" \
+                    "You will never see the video. This video timeline is the best you get. You can make reasonable extrapolation of the actual video given the Video Timeline.\n" \
+                    "Entities can be a person, company, country, concept, brand, or anything where audience may be interested in knowing the trend.\n" \
+                    "You MUST ONLY list important entities of interest, not every entity you found.\n" \
                     "For person or individual, DO NOT give sentiment rating. Put N/A for the sentiment and reason fields.\n" \
-                    "Your answer MUST consist ONLY pairs of entity, sentiment, and reason with | as delimiter. Reason MUST justify strongly about the sentiment. Follow the below format.\n\n" \
+                    "Sentiment's reason MUST justify the sentiment. For no meaningful reason, just put N/A for the sentiment's reason.\n" \
+                    "Each row of your answer MUST be of this format entity|sentiment|sentiment's reason. Follow the below example.\n\n" \
                     "Entities:\n" \
-                    "mathematic|negative|This video tells an interview with primary school grader. The kid is really afraid of mathematics as his grade is always struggling.\n" \
-                    "Rudy|N/A|Rudy is the interviewee's friend. No sentiment score is provided for person/individual.\n" \
-                    "teacher|positive|Despite the kid having not so good grades, he like all his teachers in school as they are all patient.\n" \
-                    "playing in classroom|positive|The interviewee tone indicates excitement when telling how he played in classroom.\n" \
-                    "examination|mixed|While dreading bad grade put some stress on the kid, he likes the challenge of being tested in the exams.\n\n" \
-                    "DO NOT make up anything you do not know.\n" \
-                    "DO NOT list the same entity twice. Instead, you can modify your previous extracted entities and sentiment to combine the findings.\n" \
-                    "STRICTLY FOLLOW the format above. \n" \
-                    "Give the entities directly without any intro.\n" \
+                    "mathematic|negative|The kid interviewed in the video seems to be really afraid of mathematics as his grade is always struggling.\n" \
+                    "Rudy Donna|N/A|Rudy Donna is the interviewee's friend. No sentiment score is provided for person/individual.\n" \
+                    "teacher|positive|Despite the kid having not so good grades, he seems to like all his teachers in school as they are all patient.\n" \
+                    "extracurricular activities|neutral|N/A.\n" \
+                    "examination|mixed|While the interviewee dreads examination, he likes the challenge of it.\n\n" \
+                    "STRICTLY FOLLOW the format above. DO NOT mention Video Timeline or video timeline.\n" \
+                    "Your answer should include entities found from previous part/s as well. DO NOT duplicate entities.\n" \
+                    "</Task>\n" \
                     "Entities:\n"
                     
-                    chunk_sentiment = self.call_llm(prompt)
+                    chunk_sentiment = self.call_llm(prompt, temperature=0.8, stop_sequences=["<Task>"])
                     self.video_rolling_sentiment = chunk_sentiment
                 elif is_first_chunk:
                     prompt = f"{prompt_prefix}\n\n" \
-                    f"The video has {number_of_chunks} parts. The below VIDEO TIMELINE is only for the first part.\n\n" \
+                    f"The video has {number_of_chunks} parts. The below Video Timeline is only for the first part.\n\n" \
                     f"{core_prompt}\n\n" \
-                    "Now your job is to list the entities you found in the video, their sentiment [positive, negative, mixed, neutral], and reason.\n" \
-                    "Entities can be person, company, country, concept, brand, terms, or anything where audience may be interested in knowing the trend.\n" \
+                    f"To help you, here is the summary of the whole video.\n\n{self.video_rolling_summary}\n\n" \
+                    "<Task>\n" \
+                    "Now your job is to infer and list the entities, their sentiment [positive, negative, mixed, neutral], and the sentiment's reason.\n" \
+                    "You will never see the video. This video timeline is the best you get. You can make reasonable extrapolation of the actual video given the Video Timeline.\n" \
+                    "Entities can be a person, company, country, concept, brand, or anything where audience may be interested in knowing the trend.\n" \
+                    "You MUST ONLY list important entities of interest, not every entity you found.\n" \
                     "For person or individual, DO NOT give sentiment rating. Put N/A for the sentiment and reason fields.\n" \
-                    "Your answer MUST consist ONLY pairs of entity, sentiment, and reason with | as delimiter. Reason MUST justify strongly about the sentiment. Follow the below format.\n\n" \
+                    "Sentiment's reason MUST justify the sentiment. For no meaningful reason, just put N/A for the sentiment's reason.\n" \
+                    "Each row of your answer MUST be of this format entity|sentiment|sentiment's reason. Follow the below example.\n\n" \
                     "Entities:\n" \
-                    "mathematic|negative|This video tells an interview with primary school grader. The kid is really afraid of mathematics as his grade is always struggling.\n" \
-                    "Rudy|N/A|Rudy is the interviewee's friend. No sentiment score is provided for person/individual.\n" \
-                    "teacher|positive|Despite the kid having not so good grades, he like all his teachers in school as they are all patient.\n" \
-                    "playing in classroom|positive|The interviewee tone indicates excitement when telling how he played in classroom.\n" \
-                    "examination|mixed|While dreading bad grade put some stress on the kid, he likes the challenge of being tested in the exams.\n\n" \
-                    "DO NOT make up anything you do not know.\n" \
-                    "DO NOT list the same entity twice. Instead, you can modify your previous extracted entities and sentiment to combine the findings.\n" \
-                    "STRICTLY FOLLOW the format above.\n" \
+                    "mathematic|negative|The kid interviewed in the video seems to be really afraid of mathematics as his grade is always struggling.\n" \
+                    "Rudy Donna|N/A|Rudy Donna is the interviewee's friend. No sentiment score is provided for person/individual.\n" \
+                    "teacher|positive|Despite the kid having not so good grades, he seems to like all his teachers in school as they are all patient.\n" \
+                    "extracurricular activities|neutral|N/A.\n" \
+                    "examination|mixed|While the interviewee dreads examination, he likes the challenge of it.\n\n" \
+                    "STRICTLY FOLLOW the format above. DO NOT mention Video Timeline or video timeline.\n" \
+                    "I know you need all parts of the video to come with the entity list. Therefore, for now you only need to give an INTERMEDIATE results by listing the entities you have in this first part of the video.\n" \
+                    "</Task>\n" \
                     "Entities:\n"
                     
-                    chunk_sentiment = self.call_llm(prompt)
+                    chunk_sentiment = self.call_llm(prompt, temperature=0.8, stop_sequences=["<Task>"])
                     self.video_rolling_sentiment = chunk_sentiment
                 else:
                     prompt = f"{prompt_prefix}\n\n" \
-                    f"The video has {number_of_chunks} parts.\n\n" \
-                    "Below are the entities and sentiment you extracted from the previous parts of the video, with reasoning.\n\n" \
-                    f"Entities:\n{self.video_rolling_sentiment}\n\n" \
-                    f"The below VIDEO TIMELINE is only for part {chunk_number} of the video.\n\n" \
+                    f"The video has {number_of_chunks} parts. The below Video Timeline is only for part {chunk_number+1} of the video.\n\n" \
                     f"{core_prompt}\n\n" \
-                    "Now your job is to list the entities you found in the whole video so far, their sentiment [positive, negative, mixed, neutral], and reason.\n" \
-                    "Entities can be person, company, country, concept, brand, terms, or anything where audience may be interested in knowing the trend.\n" \
+                    "Below are the entities, sentiment, and reason you extracted from the previous part/s of the video.\n\n" \
+                    f"Entities:\n{self.video_rolling_sentiment}\n\n" \
+                    f"To help you, here is the summary of the whole video.\n\n{self.video_rolling_summary}\n\n" \
+                    "<Task>\n" \
+                    "Now your job is to infer and list the entities, their sentiment [positive, negative, mixed, neutral], and the sentiment's reason.\n" \
+                    "You will never see the video. This video timeline is the best you get. You can make reasonable extrapolation of the actual video given the Video Timeline.\n" \
+                    "Entities can be a person, company, country, concept, brand, or anything where audience may be interested in knowing the trend.\n" \
+                    "You MUST ONLY list important entities of interest, not every entity you found.\n" \
                     "For person or individual, DO NOT give sentiment rating. Put N/A for the sentiment and reason fields.\n" \
-                    "Your answer MUST consist ONLY pairs of entity, entiment, and reason with | as delimiter. Reason MUST justify strongly about the sentiment. Follow the below format.\n\n" \
+                    "Sentiment's reason MUST justify the sentiment. For no meaningful reason, just put N/A for the sentiment's reason.\n" \
+                    "Each row of your answer MUST be of this format entity|sentiment|sentiment's reason. Follow the below example.\n\n" \
                     "Entities:\n" \
-                    "mathematic|negative|This video tells an interview with primary school grader. The kid is really afraid of mathematics as his grade is always struggling.\n" \
-                    "Rudy|N/A|Rudy is the interviewee's friend. No sentiment score is provided for person/individual.\n" \
-                    "teacher|positive|Despite the kid having not so good grades, he like all his teachers in school as they are all patient.\n" \
-                    "playing in classroom|positive|The interviewee tone indicates excitement when telling how he played in classroom.\n" \
-                    "examination|mixed|While dreading bad grade put some stress on the kid, he likes the challenge of being tested in the exams.\n\n" \
-                    "DO NOT make up anything you do not know.\n" \
-                    "DO NOT list the same entity twice. Instead, you can modify your previous extracted entities and sentiment to combine the findings.\n" \
-                    "STRICTLY FOLLOW the format above.\n" \
+                    "mathematic|negative|The kid interviewed in the video seems to be really afraid of mathematics as his grade is always struggling.\n" \
+                    "Rudy Donna|N/A|Rudy Donna is the interviewee's friend. No sentiment score is provided for person/individual.\n" \
+                    "teacher|positive|Despite the kid having not so good grades, he seems to like all his teachers in school as they are all patient.\n" \
+                    "extracurricular activities|neutral|N/A.\n" \
+                    "examination|mixed|While the interviewee dreads examination, he likes the challenge of it.\n\n" \
+                    "STRICTLY FOLLOW the format above. DO NOT mention Video Timeline or video timeline.\n" \
+                    "I know you need all parts of the video to come with the entity list. Therefore, for now you only need to give an INTERMEDIATE results by listing the entities you have so far. DO NOT duplicate entities.\n" \
+                    "</Task>\n" \
                     "Entities:\n"
                     
-                    chunk_sentiment = self.call_llm(prompt)
+                    chunk_sentiment = self.call_llm(prompt, temperature=0.8, stop_sequences=["<Task>"])
                     self.video_rolling_sentiment = chunk_sentiment
                 
         return self.video_rolling_sentiment
@@ -683,11 +716,11 @@ class VideoAnalyzerBedrock(VideoAnalyzer):
         super().__init__(video_length, video_scenes, video_texts, transcript)
         self.endpoint_name = endpoint_name
         self.llm_parameters = {
-        "temperature": 0.7,
-        "top_k": 10,
-        "max_tokens_to_sample": 2000,
-        "stop_sequences": ["\n\nHuman:"]
-    }
+            "temperature": 0.7,
+            "top_k": 10,
+            "max_tokens_to_sample": 2000,
+            "stop_sequences": ["\n\nHuman:"]
+        }
   
     def call_llm(self, prompt, temperature=None, top_k=None, stop_sequences=[]):
         self.llm_parameters['prompt'] = f"\n\nHuman:{prompt}\n\nAssistant:"
@@ -712,38 +745,6 @@ class VideoAnalyzerBedrock(VideoAnalyzer):
                 raise e
 
         response = json.loads(bedrock_response.get("body").read())["completion"]
-        return response
-
-# Legacy
-class VideoAnalyzerSageMaker(VideoAnalyzer):
-    def __init__(self, endpoint_name, video_length, video_scenes, video_texts, transcript):
-        super().__init__(video_length, video_scenes, video_texts, transcript)
-        self.endpoint_name = endpoint_name
-        self.llm_parameters = {
-            "max_new_tokens": 500,
-            "num_return_sequences": 1,
-            "do_sample": False,
-            "return_full_text": False,
-            "temperature": 0.8,
-            "stop": ["\n\n\n"]
-        }
-
-    def query_endpoint_with_json_payload(self, encoded_json, endpoint_name, content_type="application/json"):
-        response = sagemaker.invoke_endpoint(
-            EndpointName=endpoint_name, ContentType=content_type, Body=encoded_json
-        )
-        return response
-
-    def parse_response_model(self, query_response):
-        model_predictions = json.loads(query_response["Body"].read())
-        return [gen["generated_text"] for gen in model_predictions]
-  
-    def call_llm(self, prompt):
-        input_str = json.dumps({"inputs": prompt, "parameters": self.llm_parameters})
-        encoded_input = input_str.encode("utf-8")
-
-        response = self.query_endpoint_with_json_payload(encoded_input, endpoint_name, content_type="application/json")
-        response = self.parse_response_model(response)[0]
         return response
 
 

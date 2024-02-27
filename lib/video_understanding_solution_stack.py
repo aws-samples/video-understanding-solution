@@ -32,8 +32,8 @@ from cdk_nag import AwsSolutionsChecks, NagSuppressions
 model_id = "anthropic.claude-v2:1"
 chat_model_id = "anthropic.claude-instant-v1"
 embedding_model_id = "cohere.embed-multilingual-v3"
-visual_scene_detection_confidence_threshold = 98.0
-visual_text_detection_confidence_threshold = 98.0
+visual_scene_detection_confidence_threshold = 70.0
+visual_text_detection_confidence_threshold = 90.0
 raw_folder = "source"
 summary_folder = "summary"
 video_script_folder = "video_timeline"
@@ -45,7 +45,7 @@ video_table_name = "videos"
 entities_table_name = "entities"
 content_table_name = "content"
 embedding_dimension = 1024
-video_search_by_summary_acceptable_embedding_distance = 0.54 # Using cosine distance
+video_search_by_summary_acceptable_embedding_distance = 0.63 # Using cosine distance
 videos_api_resource = "videos"
 
 BASE_DIR = os.getcwd()
