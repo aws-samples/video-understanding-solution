@@ -56,23 +56,22 @@ def handler():
     video_transcript_s3_path = f"{transcription_folder}/{video_path}.txt"
 
     try:
-        wait_for_rekognition_label_detection(labels_job_id=labels_job_id, sort_by='TIMESTAMP')
-        wait_for_rekognition_text_detection(texts_job_id=texts_job_id)
-        wait_for_transcription_job(transcription_job_name=transcription_job_name)
-        
-        # Preprocess video
-        video_preprocessor = VideoPreprocessor(
-            rekognition=rekognition, 
-            s3=s3, 
+        # Initiate class for video preprocessing
+        video_preprocessor = VideoPreprocessor( 
             labels_job_id=labels_job_id, 
             texts_job_id=texts_job_id, 
+            transcription_job_name=transcription_job_name,
             bucket_name=bucket_name,
             video_s3_path=video_s3_path,
             video_transcript_s3_path=video_transcript_s3_path
         )
-        visual_objects, visual_texts, transcript = video_preprocessor.run()
+        # Wait for extraction jobs to finish
+        video_preprocessor.wait_for_dependencies()
         
-        # Run video analysis
+        # Preprocess and extract information
+        visual_objects, visual_texts, transcript, celebrities, faces = video_preprocessor.run()
+        
+        # Initiate class for video analysis
         video_analyzer = VideoAnalyzerBedrock(
             model_id=model_id, 
             bucket_name=bucket_name,
@@ -81,16 +80,18 @@ def handler():
             visual_objects=visual_objects,
             visual_texts=visual_texts, 
             transcript=transcript,
-            summary_folder=summary_folder
-            entity_sentiment_folder=entity_sentiment_folder
+            celebrities=celebrities,
+            faces=faces,
+            summary_folder=summary_folder,
+            entity_sentiment_folder=entity_sentiment_folder,
+            video_script_folder=video_script_folder
         )
-        summary, entities, video_script = video_analyzer.run()
+        # Run video analysis
+        video_analyzer.run()
 
+        # Store results to S3 and database
         video_analyzer.store()
 
-        store_summary_result(summary=response['summary'], video_name=video_name, video_path=video_path)
-        store_sentiment_result(sentiment_string=response['sentiment'], video_name=video_name, video_path=video_path)
-        store_video_script_result(video_script=response['video_script'], video_name=video_name, video_path=video_path)
     except Exception as err:
         print(f"Unexpected {err=}, {type(err)=}")
         raise
@@ -100,63 +101,21 @@ def handler():
         'body': json.dumps({"main_analyzer": "success"})
     }
 
-def wait_for_rekognition_label_detection(labels_job_id, sort_by):
-    getObjectDetection = rekognition.get_label_detection(JobId=labels_job_id, SortBy=sort_by)
-    while(getObjectDetection['JobStatus'] == 'IN_PROGRESS'):
-        time.sleep(5)
-        getObjectDetection = rekognition.get_label_detection(JobId=labels_job_id, SortBy=sort_by)
-
-def wait_for_rekognition_text_detection(texts_job_id):
-    getTextDetection = rekognition.get_text_detection(JobId=texts_job_id)
-    while(getTextDetection['JobStatus'] == 'IN_PROGRESS'):
-        time.sleep(5)
-        getTextDetection = rekognition.get_text_detection(JobId=texts_job_id)
-
-def wait_for_transcription_job(transcription_job_name):
-    getTranscription = transcribe.get_transcription_job(TranscriptionJobName=transcription_job_name)
-    while(getTranscription ["TranscriptionJob"]["TranscriptionJobStatus"] == 'IN_PROGRESS'):
-        time.sleep(5)
-        getTranscription = transcribe.get_transcription_job(TranscriptionJobName=transcription_job_name)
-
-class Videos(Base):
-    __tablename__ = video_table_name
-    
-    name = Column(String(200), primary_key=True, nullable=False)
-    uploaded_at = Column(DateTime(timezone=True), nullable=False)
-    summary = Column(Text)
-    summary_embedding = mapped_column(Vector(int(embedding_dimension)))
-
-class Entities(Base):
-    __tablename__ = entities_table_name
-    
-    id = Column(Integer, primary_key=True) 
-    name = Column(String(100), nullable=False)
-    sentiment = Column(String(20))
-    reason = Column(Text)
-    video_name = Column(ForeignKey(f"{video_table_name}.name"), nullable=False)
-    
-class Contents(Base):
-    __tablename__ = content_table_name
-    
-    id = Column(Integer, primary_key=True)
-    chunk = Column(Text, nullable=False)
-    chunk_embedding = Column(Vector(int(embedding_dimension))) 
-    video_name = Column(ForeignKey(f"{video_table_name}.name"), nullable=False)
-
 class VideoPreprocessor(ABC):
     def __init__(self, 
-        rekognition: botocore.client.BaseClient, 
-        s3: botocore.client.BaseClient,
         labels_job_id: str, 
-        texts_job_id: str, 
+        texts_job_id: str,
+        transcription_job_name: str,
         bucket_name: str,
         video_s3_path: str,
         video_transcript_s3_path: str):
 
-        self.rekognition: botocore.client.BaseClient = rekognition
-        self.s3: botocore.client.BaseClient = s3
+        self.rekognition = boto3.client("rekognition")
+        self.s3 = boto3.client("s3")
+        self.transcribe = boto3.client("transcribe")
         self.labels_job_id: str = labels_job_id
         self.texts_job_id: str = texts_job_id
+        self.transcription_job_name: str = transcription_job_name
         self.bucket_name: str = bucket_name
         self.video_s3_path: str = video_s3_path
         self.video_transcript_s3_path: str = video_transcript_s3_path
@@ -173,6 +132,50 @@ class VideoPreprocessor(ABC):
         self.celebrity_match_confidence_threshold = 97
         self.celebrity_emotion_threshold = 95
         self.face_detection_confidence_threshold = 97
+    
+    class Videos(Base):
+        __tablename__ = video_table_name
+        
+        name = Column(String(200), primary_key=True, nullable=False)
+        uploaded_at = Column(DateTime(timezone=True), nullable=False)
+        summary = Column(Text)
+        summary_embedding = mapped_column(Vector(int(embedding_dimension)))
+
+    class Entities(Base):
+        __tablename__ = entities_table_name
+        
+        id = Column(Integer, primary_key=True) 
+        name = Column(String(100), nullable=False)
+        sentiment = Column(String(20))
+        reason = Column(Text)
+        video_name = Column(ForeignKey(f"{video_table_name}.name"), nullable=False)
+        
+    class Contents(Base):
+        __tablename__ = content_table_name
+        
+        id = Column(Integer, primary_key=True)
+        chunk = Column(Text, nullable=False)
+        chunk_embedding = Column(Vector(int(embedding_dimension))) 
+        video_name = Column(ForeignKey(f"{video_table_name}.name"), nullable=False)
+
+    
+    def wait_for_rekognition_label_detection(self, sort_by):
+        get_object_detection = self.rekognition.get_label_detection(JobId=self.labels_job_id, SortBy=sort_by)
+        while(get_object_detection['JobStatus'] == 'IN_PROGRESS'):
+            time.sleep(5)
+            get_object_detection = self.rekognition.get_label_detection(JobId=self.labels_job_id, SortBy=sort_by)
+
+    def wait_for_rekognition_text_detection(self):
+        get_text_detection = rekognition.get_text_detection(JobId=self.texts_job_id)
+        while(get_text_detection['JobStatus'] == 'IN_PROGRESS'):
+            time.sleep(5)
+            get_text_detection = self.rekognition.get_text_detection(JobId=self.texts_job_id)
+
+    def wait_for_transcription_job(self):
+        get_transcription = self.transcribe.get_transcription_job(TranscriptionJobName=self.transcription_job_name)
+        while(get_transcription["TranscriptionJob"]["TranscriptionJobStatus"] == 'IN_PROGRESS'):
+            time.sleep(5)
+            get_transcription = self.transcribe.get_transcription_job(TranscriptionJobName=self.transcription_job_name)
     
     def extract_visual_objects(self, get_object_detection_result: dict):
         label: dict
@@ -312,6 +315,11 @@ class VideoPreprocessor(ABC):
                         if int(face['Smile']['Confidence']) >= self.face_detection_confidence_threshold: face_datum += f"|{'smiling' if face['Smile']['Value'] else 'not smiling'}"
                         self.faces[timestamp_second].append(face_datum)
 
+    def wait_for_dependencies(self):
+        self.wait_for_rekognition_label_detection(sort_by='TIMESTAMP')
+        self.wait_for_rekognition_text_detection()
+        self.wait_for_transcription_job()
+
     def run(self):
         self.iterate_object_detection_result()
         self.iterate_text_detection_result()
@@ -327,39 +335,45 @@ class VideoAnalyzer(ABC):
         video_path: str, 
         video_scenes: dict[int, list[str]], 
         video_texts: dict[int, list[str]], 
-        transcript,
+        transcript: dict,
+        celebrities: dict[int, list[str]],
+        faces: dict[int, list[str]],
         summary_folder: str,
         entity_sentiment_folder: str,
         video_script_folder: str
         ):
 
         self.s3_client = boto3.client("s3")
-        self.bucket_name = bucket_name
-        self.summary_folder = summary_folder
-        self.entity_sentiment_folder = entity_sentiment_folder
-        self.video_name = video_name
-        self.video_path = video_path
-        self.original_scenes = video_scenes
-        self.original_visual_texts = video_texts
-        self.original_transcript = transcript
-        self.visual_objects = []
-        self.visual_texts = []
-        self.transcript = []
-        self.video_script_chunk_size_for_summary_generation = 100000 # characters
-        self.video_script_chunk_overlap_for_summary_generation = 500 # characters
-        self.video_script_chunk_size_for_entities_extraction = 50000 #10000 # characters
-        self.video_script_chunk_overlap_for_entities_extraction = 500 #200 # characters
-        self.video_script_storage_chunk_size = 768 #10000 # Number of characters, which depends on the embedding model
-        self.scene_similarity_score = 0.9
-        self.text_similarity_score = 0.9
-        self.video_rolling_summary = ""
-        self.video_rolling_sentiment = ""
-        self.combined_video_script = ""
-        self.all_combined_video_script = ""
-        self.llm_parameters = {}
-        self.summary = ""
-        self.entities = ""
-        self.video_script = ""
+        self.bucket_name: str = bucket_name
+        self.summary_folder: str = summary_folder
+        self.entity_sentiment_folder: str = entity_sentiment_folder
+        self.video_name: str = video_name
+        self.video_path: str = video_path
+        self.original_scene: dict[int, list[str]] = video_scenes
+        self.original_visual_texts: dict[int, list[str]] = video_texts
+        self.original_transcript: dict = transcript
+        self.original_celebrities: dict[int, list[str]] = celebrities
+        self.original_faces: dict[int, list[str]] = faces
+        self.visual_objects: list[list[Union[int, list[str]]]] = []
+        self.visual_texts: list[list[Union[int, list[str]]]] = []
+        self.transcript: list[list[Union[int, str]]] = []
+        self.celebrities: list[list[Union[int, list[str]]]] = []
+        self.faces: list[list[Union[int, list[str]]]] = []
+        self.video_script_chunk_size_for_summary_generation: int = 100000 # characters
+        self.video_script_chunk_overlap_for_summary_generation: int = 500 # characters
+        self.video_script_chunk_size_for_entities_extraction: int = 50000 #10000 # characters
+        self.video_script_chunk_overlap_for_entities_extraction: int = 500 #200 # characters
+        self.video_script_storage_chunk_size: int = 768 #10000 # Number of characters, which depends on the embedding model
+        self.scene_similarity_score: float = 0.9
+        self.text_similarity_score: float = 0.9
+        self.video_rolling_summary: str = ""
+        self.video_rolling_sentiment: str = ""
+        self.combined_video_script: str = ""
+        self.all_combined_video_script: str = ""
+        self.llm_parameters: dict = {}
+        self.summary: str = ""
+        self.entities: str = ""
+        self.video_script: str = ""
   
     @abstractmethod
     def call_llm(self, prompt):
@@ -441,6 +455,12 @@ class VideoAnalyzer(ABC):
                     sentence += f" { item['alternatives'][0]['content'] }"
 
                 self.transcript = sorted(transcript.items())
+    
+    def preprocess_celebrities(self):
+        self.celebrities = sorted(self.original_celebrities.items())
+
+    def preprocess_faces(self):
+        self.faces = sorted(self.original_faces.items())
       
     def generate_combined_video_script(self):
         def transform_scenes(x):
@@ -460,9 +480,21 @@ class VideoAnalyzer(ABC):
             transcript = x[1]
             return (timestamp, f"Voice:{transcript}")
         transcript  = list(map(transform_transcript, self.transcript))
+
+        def transform_celebrities(x):
+            timestamp = x[0]
+            celebrities = ",".join(x[1])
+            return (timestamp, f"Celebrity:{celebrities}")
+        visual_celebrities = list(map(transform_celebrities, self.celebrities))
+
+        def transform_faces(x):
+            timestamp = x[0]
+            faces = ",".join(x[1])
+            return (timestamp, f"Face:{faces}")
+        visual_faces = list(map(transform_faces, self.faces))
  
         # Combine all inputs
-        combined_video_script = sorted( scenes + visual_texts + transcript)
+        combined_video_script = sorted( scenes + visual_texts + transcript + visual_celebrities + visual_faces )
         
         combined_video_script = "\n".join(list(map(lambda x: f"{x[0]}:{x[1]}", combined_video_script)))
         
@@ -475,8 +507,10 @@ class VideoAnalyzer(ABC):
                         "The Video Timeline contains the visual scenes, the visual texts, and human voice in the video.\n" \
                         "Visual scenes (scene) represents what objects are visible in the video at that second. This can be the objects seen in camera, or objects from a screen sharing, or any other visual scenarios. You can infer how the visualization look like, so long as you are confident.\n" \
                         "Visual texts (text) are the text visible in the video. It can be texts in real world objects as recorded in video camera, or those from screen sharing, or those from presentation recording, or those from news, movies, or others. \n" \
-                        "Human voice (voice) is the transcription of the video.\n"
-        
+                        "Human voice (voice) is the transcription of the video.\n" \
+                        "Celebrities (celebrity) provides information about the celebrity detected in the video at that second. For example: name:Jeff Bezos|emotions:happy-surprised,name:Andy Jassy|emotions:calm,name:Jeff Barr \n" \
+                        "Human faces (face) lists the face seen in the video at that second. For example: age range:23-29 years old|gender:male|smiling,age range:31-33 years old|not smiling,age range:44-49 years old. If there is one or more celebrities detected at that second, these faces may refer to those celebrities as well. \n"
+
         video_script_length = len(self.combined_video_script)
 
         # When the video is short enough to fit into 1 chunk
@@ -581,7 +615,9 @@ class VideoAnalyzer(ABC):
                         "The Video Timeline contains the visual scenes, the visual texts, and human voice in the video.\n" \
                         "Visual scenes (scene) represents what objects are visible in the video at that second. This can be the objects seen in camera, or objects from a screen sharing, or any other visual scenarios. You can infer how the visualization look like, so long as you are confident.\n" \
                         "Visual texts (text) are the text visible in the video. It can be texts in real world objects as recorded in video camera, or those from screen sharing, or those from presentation recording, or those from news, movies, or others. \n" \
-                        "Human voice (voice) is the transcription of the video.\n"
+                        "Human voice (voice) is the transcription of the video.\n" \
+                        "Celebrities (celebrity) provides information about the celebrity detected in the video at that second. For example: name:Jeff Bezos|emotions:happy-surprised,name:Andy Jassy|emotions:calm,name:Jeff Barr \n" \
+                        "Human faces (face) lists the face seen in the video at that second. For example: age range:23-29 years old|gender:male|smiling,age range:31-33 years old|not smiling,age range:44-49 years old. If there is one or more celebrities detected at that second, these faces may refer to those celebrities as well. \n"
                         
         
         video_script_length = len(self.combined_video_script)
@@ -823,6 +859,9 @@ class VideoAnalyzer(ABC):
         self.preprocess_visual_objects()
         self.preprocess_visual_texts()
         self.preprocess_transcript()
+        self.preprocess_celebrities()
+        self.preprocess_faces()
+
         self.generate_combined_video_script()
 
         self.summary = self.generate_summary()
