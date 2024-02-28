@@ -581,12 +581,7 @@ class VideoUnderstandingSolutionStack(Stack):
                             effect=_iam.Effect.ALLOW,
                         ),
                         _iam.PolicyStatement(
-                            actions=["rekognition:GetLabelDetection"],
-                            resources=["*"],
-                            effect=_iam.Effect.ALLOW,
-                        ),
-                        _iam.PolicyStatement(
-                            actions=["rekognition:GetTextDetection"],
+                            actions=["rekognition:GetLabelDetection", "rekognition:GetTextDetection", "rekognition:RecognizeCelebrities", "rekognition:DetectFaces"],
                             resources=["*"],
                             effect=_iam.Effect.ALLOW,
                         ),

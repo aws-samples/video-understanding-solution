@@ -5,3 +5,4 @@ psycopg2-binary>=2.9.9
 SQLAlchemy>=2.0.26
 pgvector>=0.2.5
 opencv-python>=4.9.0.80
+pillow>=10.2.0

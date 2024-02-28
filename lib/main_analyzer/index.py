@@ -1,4 +1,4 @@
-import os, time, json, copy, math, re
+import os, time, json, copy, math, re, io
 from abc import ABC, abstractmethod
 import boto3, botocore
 from botocore.config import Config
@@ -9,6 +9,7 @@ from pgvector.sqlalchemy import Vector
 from typing import Union
 import cv2
 import base64
+from PIL import Image
 
 config = Config(read_timeout=1000) # Extends botocore read timeout to 1000 seconds
 
@@ -73,7 +74,8 @@ def handler():
         
         # Initiate class for video analysis
         video_analyzer = VideoAnalyzerBedrock(
-            model_id=model_id, 
+            model_name=model_name, 
+            embedding_model_name=embedding_model_name,
             bucket_name=bucket_name,
             video_name=video_name,
             video_path=video_path,
@@ -126,38 +128,12 @@ class VideoPreprocessor(ABC):
         self.transcript: dict
         self.celebrities: dict[int, list[str]] = {}
         self.faces: dict[int, list[str]] = {}
-        self.person_timestamps_millis = list[int] = []
-        self.maximum_number_of_objects_per_timestamp_second = 50
-        self.maximum_number_of_texts_per_timestamp_second = 50
-        self.celebrity_match_confidence_threshold = 97
-        self.celebrity_emotion_threshold = 95
-        self.face_detection_confidence_threshold = 97
-    
-    class Videos(Base):
-        __tablename__ = video_table_name
-        
-        name = Column(String(200), primary_key=True, nullable=False)
-        uploaded_at = Column(DateTime(timezone=True), nullable=False)
-        summary = Column(Text)
-        summary_embedding = mapped_column(Vector(int(embedding_dimension)))
-
-    class Entities(Base):
-        __tablename__ = entities_table_name
-        
-        id = Column(Integer, primary_key=True) 
-        name = Column(String(100), nullable=False)
-        sentiment = Column(String(20))
-        reason = Column(Text)
-        video_name = Column(ForeignKey(f"{video_table_name}.name"), nullable=False)
-        
-    class Contents(Base):
-        __tablename__ = content_table_name
-        
-        id = Column(Integer, primary_key=True)
-        chunk = Column(Text, nullable=False)
-        chunk_embedding = Column(Vector(int(embedding_dimension))) 
-        video_name = Column(ForeignKey(f"{video_table_name}.name"), nullable=False)
-
+        self.person_timestamps_millis: list[int] = []
+        self.maximum_number_of_objects_per_timestamp_second: int = 50
+        self.maximum_number_of_texts_per_timestamp_second: int = 50
+        self.celebrity_match_confidence_threshold: int = 97
+        self.celebrity_emotion_threshold: int = 85
+        self.face_detection_confidence_threshold: int = 97
     
     def wait_for_rekognition_label_detection(self, sort_by):
         get_object_detection = self.rekognition.get_label_detection(JobId=self.labels_job_id, SortBy=sort_by)
@@ -181,8 +157,8 @@ class VideoPreprocessor(ABC):
         label: dict
         for label in get_object_detection_result['Labels']:
             objects_at_this_timestamp: list = []
-            timestamp_millis:int = int(text_detection['Timestamp'])
-            timestamp_second: int = int(int(label['Timestamp'])/1000)
+            timestamp_millis:int = int(label['Timestamp'])
+            timestamp_second: int = int(timestamp_millis/1000)
 
             # If this timestamp second is already in self.visual_objects dictionary, then use it and append. Otherwise, add a new key to the dict.
             if timestamp_second in self.visual_objects:
@@ -193,7 +169,7 @@ class VideoPreprocessor(ABC):
             object_name: str = label['Label']['Name']
 
             # If this is a Face object, then register this into the list of timetamps
-            if object_name == "Face":
+            if object_name == "Person":
                 self.person_timestamps_millis.append(timestamp_millis)
 
             # To avoid having too many detected visual objects, cut the detected object per frame to a certain number (default = 25)
@@ -211,7 +187,7 @@ class VideoPreprocessor(ABC):
         self.video_duration_seconds = self.video_duration_millis/1000
 
         # Extract visual scenes and populate self.visual_objects
-        self.extract_visual_scenes(get_object_detection_result)
+        self.extract_visual_objects(get_object_detection_result)
 
         # In case results is large, iterate the next pages until no more page left.
         while("NextToken" in get_object_detection_result):
@@ -220,7 +196,7 @@ class VideoPreprocessor(ABC):
                 MaxResults=1000,
                 NextToken=get_object_detection_result["NextToken"]
             )
-            self.extract_visual_scenes(get_object_detection_result)
+            self.extract_visual_objects(get_object_detection_result)
 
     def extract_visual_texts(self, get_text_detection_result: dict):
         text_detection: dict
@@ -279,17 +255,21 @@ class VideoPreprocessor(ABC):
         video: cv2.VideoCapture = self.load_video( self.download_video() )
         
         timestamp_millis: int
-        for timestamp_millis in person_timestamps_millis:
+        for timestamp_millis in self.person_timestamps_millis:
             timestamp_second = int(timestamp_millis/1000)
             video.set(cv2.CAP_PROP_POS_MSEC, int(timestamp_millis))
             success, frame = video.read()
             
             if success:
-                retval, frame_buffer = cv2.imencode('.jpg', frame)
-                base64_image: str = base64.b64encode(frame_buffer)
+                image = Image.fromarray(frame)
+                io_stream = io.BytesIO()
+                image.save(io_stream, format='JPEG')
+                image = io_stream.getvalue()
 
                 # Call Rekognition to detect celebrity
-                celebrity_faces: dict = self.rekognition.recognize_celebrities(Image={'Bytes': base64_image})["CelebrityFaces"]
+                recognize_celebrity_response: dict = self.rekognition.recognize_celebrities(Image={'Bytes': image})
+                celebrity_faces: list[dict] = recognize_celebrity_response["CelebrityFaces"]
+                unrecognized_faces: list[dict] = recognize_celebrity_response["UnrecognizedFaces"]
                 
                 # Parse Rekognition celebrity detection data and add to dictionary as appropriate
                 if len(celebrity_faces) > 0:
@@ -297,23 +277,27 @@ class VideoPreprocessor(ABC):
                     celebrity_face: dict
                     for celebrity_face in celebrity_faces:
                         if int(celebrity_face["MatchConfidence"]) < self.celebrity_match_confidence_threshold: continue
-                        celebrity_datum: str = f"name: {celebrity_face['Face']['Name']}"
-                        celebrity_emotions: str = "-".join([emo['Type'].lower() if int(emo['Confidence']) else '' >= self.celebrity_emotion_threshold for emo in celebrity_face['Face']['Emotions']])
+                        celebrity_datum: str = f"name: {celebrity_face['Name']}"
+                        # Form a string like "calm-happy"
+                        celebrity_emotions: str = "-".join(filter(lambda em: (len(em) > 0),[emo['Type'].lower() if int(emo['Confidence']) >= self.celebrity_emotion_threshold else '' for emo in celebrity_face['Face']['Emotions']]))
                         if celebrity_emotions != '': celebrity_datum += f"|emotions: {celebrity_emotions}"
                         self.celebrities[timestamp_second].append(celebrity_datum)
 
-                # Call Rekognition to detect faces
-                faces: dict = self.rekognition.detect_faces(Image={'Bytes': base64_image},Attributes=['DEFAULT','AGE_RANGE','GENDER', 'SMILE'])['FaceDetails']
+                # Only call the detect face APU if there are other faces beside the recognized celebrity in this frame
+                # This also applies when there is 0 celebrity detected, but there are more faces in the frame.
+                if len(unrecognized_faces) > 0:
+                    # Call Rekognition to detect faces
+                    faces: dict = self.rekognition.detect_faces(Image={'Bytes': image},Attributes=['DEFAULT','AGE_RANGE','GENDER', 'SMILE'])['FaceDetails']
 
-                if len(faces) > 0:
-                    if timestamp_second not in self.faces: self.faces[timestamp_second] = []
-                    face: dict
-                    for face in faces:
-                        if int(face["Confidence"]) < self.face_detection_confidence_threshold : continue
-                        face_datum: str = f"age range: {face['AgeRange']['Low']} - {face['AgeRange']['High']} years old"
-                        if int(face['Gender']['Confidence']) >= self.face_detection_confidence_threshold: face_datum += f"|gender: {face['Gender']['Value']}"
-                        if int(face['Smile']['Confidence']) >= self.face_detection_confidence_threshold: face_datum += f"|{'smiling' if face['Smile']['Value'] else 'not smiling'}"
-                        self.faces[timestamp_second].append(face_datum)
+                    if len(faces) > 0:
+                        if timestamp_second not in self.faces: self.faces[timestamp_second] = []
+                        face: dict
+                        for face in faces:
+                            if int(face["Confidence"]) < self.face_detection_confidence_threshold : continue
+                            face_datum: str = f"age range: {face['AgeRange']['Low']} - {face['AgeRange']['High']} years old"
+                            if int(face['Gender']['Confidence']) >= self.face_detection_confidence_threshold: face_datum += f"|gender: {face['Gender']['Value']}"
+                            if int(face['Smile']['Confidence']) >= self.face_detection_confidence_threshold: face_datum += f"|{'smiling' if face['Smile']['Value'] else 'not smiling'}"
+                            self.faces[timestamp_second].append(face_datum)
 
     def wait_for_dependencies(self):
         self.wait_for_rekognition_label_detection(sort_by='TIMESTAMP')
@@ -333,8 +317,8 @@ class VideoAnalyzer(ABC):
         bucket_name: str,
         video_name: str, 
         video_path: str, 
-        video_scenes: dict[int, list[str]], 
-        video_texts: dict[int, list[str]], 
+        visual_objects: dict[int, list[str]], 
+        visual_texts: dict[int, list[str]], 
         transcript: dict,
         celebrities: dict[int, list[str]],
         faces: dict[int, list[str]],
@@ -349,8 +333,8 @@ class VideoAnalyzer(ABC):
         self.entity_sentiment_folder: str = entity_sentiment_folder
         self.video_name: str = video_name
         self.video_path: str = video_path
-        self.original_scene: dict[int, list[str]] = video_scenes
-        self.original_visual_texts: dict[int, list[str]] = video_texts
+        self.original_visual_objects: dict[int, list[str]] = visual_objects
+        self.original_visual_texts: dict[int, list[str]] = visual_texts
         self.original_transcript: dict = transcript
         self.original_celebrities: dict[int, list[str]] = celebrities
         self.original_faces: dict[int, list[str]] = faces
@@ -374,6 +358,31 @@ class VideoAnalyzer(ABC):
         self.summary: str = ""
         self.entities: str = ""
         self.video_script: str = ""
+    
+    class Videos(Base):
+        __tablename__ = video_table_name
+        
+        name = Column(String(200), primary_key=True, nullable=False)
+        uploaded_at = Column(DateTime(timezone=True), nullable=False)
+        summary = Column(Text)
+        summary_embedding = mapped_column(Vector(int(embedding_dimension)))
+
+    class Entities(Base):
+        __tablename__ = entities_table_name
+        
+        id = Column(Integer, primary_key=True) 
+        name = Column(String(100), nullable=False)
+        sentiment = Column(String(20))
+        reason = Column(Text)
+        video_name = Column(ForeignKey(f"{video_table_name}.name"), nullable=False)
+        
+    class Contents(Base):
+        __tablename__ = content_table_name
+        
+        id = Column(Integer, primary_key=True)
+        chunk = Column(Text, nullable=False)
+        chunk_embedding = Column(Vector(int(embedding_dimension))) 
+        video_name = Column(ForeignKey(f"{video_table_name}.name"), nullable=False)
   
     @abstractmethod
     def call_llm(self, prompt):
@@ -384,7 +393,7 @@ class VideoAnalyzer(ABC):
         pass
   
     def preprocess_visual_objects(self):
-        visual_objects_across_timestamps = dict(sorted(copy.deepcopy(self.original_scenes).items()))
+        visual_objects_across_timestamps = dict(sorted(copy.deepcopy(self.original_visual_objects).items()))
         prev_objects: list = []
 
         timestamp_second: int
@@ -772,8 +781,8 @@ class VideoAnalyzer(ABC):
 
         # Store summary in database
         update_stmt = (
-            update(Videos).
-            where(Videos.name == self.video_path).
+            update(self.Videos).
+            where(self.Videos.name == self.video_path).
             values(summary = self.summary, summary_embedding = summary_embedding)
         )
         
@@ -799,10 +808,10 @@ class VideoAnalyzer(ABC):
             Key=f"{self.entity_sentiment_folder}/{self.video_path}.txt"
         )
 
-        entities: list[Entities] = []
+        entities: list[self.Entities] = []
         for entity, value in entities_dict.items():
             # Store entity in database
-            entities.append(Entities(
+            entities.append(self.Entities(
                 name=entity,
                 sentiment=value['sentiment'],
                 reason=value['reason'],
@@ -814,7 +823,7 @@ class VideoAnalyzer(ABC):
         session.commit()
         
     def store_video_script_result(self):
-       self.s3_client.put_object(
+        self.s3_client.put_object(
             Body=self.video_script, 
             Bucket=self.bucket_name, 
             Key=f"{self.video_script_folder}/{self.video_path}.txt"
@@ -824,7 +833,7 @@ class VideoAnalyzer(ABC):
         video_script_length = len(self.video_script)
         number_of_chunks = math.ceil( (video_script_length + 1) / self.video_script_storage_chunk_size )
 
-        chunks: list[Contents] = []
+        chunks: list[self.Contents] = []
         for chunk_number in range(0, number_of_chunks):
             is_last_chunk = (chunk_number == (number_of_chunks - 1))
             is_first_chunk = (chunk_number == 0)
@@ -844,7 +853,7 @@ class VideoAnalyzer(ABC):
             chunk_embedding = call_embedding_llm(chunk_string)
             
             # Create database object
-            chunks.append(Contents(
+            chunks.append(self.Contents(
                 chunk=chunk_string,
                 chunk_embedding=chunk_embedding,
                 video_name=self.video_path
@@ -880,14 +889,16 @@ class VideoAnalyzerBedrock(VideoAnalyzer):
         bucket_name: str,
         video_name: str, 
         video_path: str, 
-        video_scenes: dict[int, list[str]], 
-        video_texts: dict[int, list[str]], 
-        transcript,
+        visual_objects: dict[int, list[str]], 
+        visual_texts: dict[int, list[str]], 
+        transcript: dict,
+        celebrities: dict[int, list[str]],
+        faces: dict[int, list[str]],
         summary_folder: str,
         entity_sentiment_folder: str,
         video_script_folder: str
         ):
-        super().__init__(bucket_name, video_name, video_path, video_scenes, video_texts, transcript, summary_folder, entity_sentiment_folder, video_script_folder)
+        super().__init__(bucket_name, video_name, video_path, visual_objects, visual_texts, transcript, celebrities, faces,summary_folder, entity_sentiment_folder, video_script_folder)
         self.bedrock_client = boto3.client("bedrock-runtime")
         self.model_name = model_name
         self.embedding_model_name = embedding_model_name
@@ -932,7 +943,7 @@ class VideoAnalyzerBedrock(VideoAnalyzer):
         call_done = False
         while(not call_done):
             try:
-                response = self.bedrock_client.invoke_model(body=body, modelId=embedding_model_id)
+                response = self.bedrock_client.invoke_model(body=body, modelId=self.embedding_model_name)
                 call_done = True
             except ThrottlingException:
                 print("Amazon Bedrock throttling exception")
