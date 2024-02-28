@@ -134,6 +134,7 @@ class VideoPreprocessor(ABC):
         self.celebrity_match_confidence_threshold: int = 97
         self.celebrity_emotion_threshold: int = 85
         self.face_detection_confidence_threshold: int = 97
+        self.face_bounding_box_overlap_threshold: float = 0.1
     
     def wait_for_rekognition_label_detection(self, sort_by):
         get_object_detection = self.rekognition.get_label_detection(JobId=self.labels_job_id, SortBy=sort_by)
@@ -272,16 +273,22 @@ class VideoPreprocessor(ABC):
                 unrecognized_faces: list[dict] = recognize_celebrity_response["UnrecognizedFaces"]
                 
                 # Parse Rekognition celebrity detection data and add to dictionary as appropriate
+                celebrities_bounding_boxes: list[list[float]] = []
                 if len(celebrity_faces) > 0:
                     if timestamp_second not in self.celebrities: self.celebrities[timestamp_second] = []
                     celebrity_face: dict
                     for celebrity_face in celebrity_faces:
                         if int(celebrity_face["MatchConfidence"]) < self.celebrity_match_confidence_threshold: continue
-                        celebrity_datum: str = f"name: {celebrity_face['Name']}"
+                        celebrity_datum: str = celebrity_face['Name']
+                        
                         # Form a string like "calm-happy"
                         celebrity_emotions: str = "-".join(filter(lambda em: (len(em) > 0),[emo['Type'].lower() if int(emo['Confidence']) >= self.celebrity_emotion_threshold else '' for emo in celebrity_face['Face']['Emotions']]))
-                        if celebrity_emotions != '': celebrity_datum += f"|emotions: {celebrity_emotions}"
+                        
+                        if celebrity_emotions != '': celebrity_datum += f"|{celebrity_emotions}"
+                        
                         self.celebrities[timestamp_second].append(celebrity_datum)
+                        bounding_boxes: dict = celebrity_face['Face']['BoundingBox']
+                        celebrities_bounding_boxes.append([float(bounding_boxes['Top']), float(bounding_boxes['Left']), float(bounding_boxes['Height']), float(bounding_boxes['Width'])])
 
                 # Only call the detect face APU if there are other faces beside the recognized celebrity in this frame
                 # This also applies when there is 0 celebrity detected, but there are more faces in the frame.
@@ -297,7 +304,21 @@ class VideoPreprocessor(ABC):
                             face_datum: str = f"age range: {face['AgeRange']['Low']} - {face['AgeRange']['High']} years old"
                             if int(face['Gender']['Confidence']) >= self.face_detection_confidence_threshold: face_datum += f"|gender: {face['Gender']['Value']}"
                             if int(face['Smile']['Confidence']) >= self.face_detection_confidence_threshold: face_datum += f"|{'smiling' if face['Smile']['Value'] else 'not smiling'}"
-                            self.faces[timestamp_second].append(face_datum)
+                            
+                            bounding_boxes: dict = face['BoundingBox']
+                            top, left, height, width = float(bounding_boxes['Top']), float(bounding_boxes['Left']), float(bounding_boxes['Height']), float(bounding_boxes['Width'])
+                            face_found_in_celebrities_list = False
+                            for celeb_bounding_box in celebrities_bounding_boxes:
+                                if (
+                                    (abs(celeb[0] - top) <= self.face_bounding_box_overlap_threshold) and
+                                    (abs(celeb[1] - left) <= self.face_bounding_box_overlap_threshold) and
+                                    (abs(celeb[2] - height) <= self.face_bounding_box_overlap_threshold) and
+                                    (abs(celeb[3] - width) <= self.face_bounding_box_overlap_threshold)
+                                ):
+                                face_found_in_celebrities_list = True
+
+                            if not face_found_in_celebrities_list:
+                                self.faces[timestamp_second].append(face_datum)
 
     def wait_for_dependencies(self):
         self.wait_for_rekognition_label_detection(sort_by='TIMESTAMP')
@@ -517,8 +538,8 @@ class VideoAnalyzer(ABC):
                         "Visual scenes (scene) represents what objects are visible in the video at that second. This can be the objects seen in camera, or objects from a screen sharing, or any other visual scenarios. You can infer how the visualization look like, so long as you are confident.\n" \
                         "Visual texts (text) are the text visible in the video. It can be texts in real world objects as recorded in video camera, or those from screen sharing, or those from presentation recording, or those from news, movies, or others. \n" \
                         "Human voice (voice) is the transcription of the video.\n" \
-                        "Celebrities (celebrity) provides information about the celebrity detected in the video at that second. For example: name:Jeff Bezos|emotions:happy-surprised,name:Andy Jassy|emotions:calm,name:Jeff Barr \n" \
-                        "Human faces (face) lists the face seen in the video at that second. For example: age range:23-29 years old|gender:male|smiling,age range:31-33 years old|not smiling,age range:44-49 years old. If there is one or more celebrities detected at that second, these faces may refer to those celebrities as well. \n"
+                        "Celebrities (celebrity) provides information about the celebrity detected in the video at that second and (if any) their visible detected emotions. For example: Jeff Bezos|happy-surprised,Andy Jassy|calm,Jeff Barr \n" \
+                        "Human faces (face) lists the face seen in the video at that second, the gender (if detected), and whether the person smiles or not (if detected). For example: 23-29 years old|male|smiling,31-33 years old|not smiling,44-49 years old. \n"
 
         video_script_length = len(self.combined_video_script)
 
@@ -625,8 +646,8 @@ class VideoAnalyzer(ABC):
                         "Visual scenes (scene) represents what objects are visible in the video at that second. This can be the objects seen in camera, or objects from a screen sharing, or any other visual scenarios. You can infer how the visualization look like, so long as you are confident.\n" \
                         "Visual texts (text) are the text visible in the video. It can be texts in real world objects as recorded in video camera, or those from screen sharing, or those from presentation recording, or those from news, movies, or others. \n" \
                         "Human voice (voice) is the transcription of the video.\n" \
-                        "Celebrities (celebrity) provides information about the celebrity detected in the video at that second. For example: name:Jeff Bezos|emotions:happy-surprised,name:Andy Jassy|emotions:calm,name:Jeff Barr \n" \
-                        "Human faces (face) lists the face seen in the video at that second. For example: age range:23-29 years old|gender:male|smiling,age range:31-33 years old|not smiling,age range:44-49 years old. If there is one or more celebrities detected at that second, these faces may refer to those celebrities as well. \n"
+                        "Celebrities (celebrity) provides information about the celebrity detected in the video at that second and (if any) their visible detected emotions. For example: Jeff Bezos|happy-surprised,Andy Jassy|calm,Jeff Barr \n" \
+                       "Human faces (face) lists the face seen in the video at that second, the gender (if detected), and whether the person smiles or not (if detected). For example: 23-29 years old|male|smiling,31-33 years old|not smiling,44-49 years old. \n"
                         
         
         video_script_length = len(self.combined_video_script)
