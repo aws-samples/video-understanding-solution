@@ -487,7 +487,6 @@ class VideoUnderstandingSolutionStack(Stack):
                     "MediaFileUri.$": f"States.Format('s3://{video_bucket_s3.bucket_name}/{{}}', $.videoS3Path)"
                 },
                 "TranscriptionJobName.$": "$.eventId",
-                "LanguageCode": "en-US",
                 "MediaFormat": "mp4",
                 "OutputBucketName": video_bucket_s3.bucket_name,
                 "OutputKey.$": f"States.Format('{transcription_root_folder}/{{}}.txt', $.videoS3Path)",
