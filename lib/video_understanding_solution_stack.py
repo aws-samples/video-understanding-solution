@@ -491,6 +491,11 @@ class VideoUnderstandingSolutionStack(Stack):
                 "MediaFormat": "mp4",
                 "OutputBucketName": video_bucket_s3.bucket_name,
                 "OutputKey.$": f"States.Format('{transcription_root_folder}/{{}}.txt', $.videoS3Path)",
+                "Settings": {
+                    "ShowSpeakerLabels": True,    
+                    "MaxSpeakerLabels": 10
+                },
+                "IdentifyMultipleLanguages": True
             },
             result_path="$.startTranscriptionResult",
             iam_resources=["*"],
@@ -621,7 +626,6 @@ class VideoUnderstandingSolutionStack(Stack):
 
         # Suppress cdk_nag it for using * in IAM policy as reasonable in the resources and for using AmazonECSTaskExecutionRolePolicy managed role by AWS.
         NagSuppressions.add_resource_suppressions(main_analyzer_role, [
-            #{ "id": 'AwsSolutions-IAM4', "reason": 'Allow to use AmazonECSTaskExecutionRolePolicy AWS managed service role'},
             { "id": 'AwsSolutions-IAM5', "reason": 'Allow to use * for Rekognition read APIs which resources have to be *, and to use <arn>/* for Transcribe GetTranscriptionJob as the job name can vary'}
         ], True)
 
@@ -1020,7 +1024,7 @@ class VideoUnderstandingSolutionStack(Stack):
             ],
             request_parameters={
                 "method.request.querystring.page": True,
-                "method.request.querystring.videoNameStartsWith": False,
+                "method.request.querystring.videoNameContains": False,
                 "method.request.querystring.uploadedBetween": False,
                 "method.request.querystring.about": False,
             },

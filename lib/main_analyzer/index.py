@@ -3,8 +3,7 @@ from abc import ABC, abstractmethod
 import boto3, botocore
 from botocore.config import Config
 from sqlalchemy import create_engine, Column, DateTime, String, Text, Integer, func, ForeignKey, update
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import mapped_column, sessionmaker
+from sqlalchemy.orm import mapped_column, sessionmaker,  declarative_base
 from pgvector.sqlalchemy import Vector
 from typing import Union, Self
 import cv2
@@ -555,6 +554,7 @@ class VideoAnalyzer(ABC):
         sentence_start_time = -1
         sentence = ""
         for item in self.original_transcript["results"]["items"]:
+            # If this is a punctuation, which could be end of sentence
             if item['type'] == 'punctuation':
                 # Add punctuation to sentence without heading space
                 sentence += f"{ item['alternatives'][0]['content'] }"
@@ -565,11 +565,17 @@ class VideoAnalyzer(ABC):
                 sentence_start_time  = -1
             else:
                 word_start_time = int(float(item['start_time']))
+                # If this is start of sentence
                 if sentence_start_time  == -1:
+                    # If there is a speaker label, then start the sentence by identifying the speaker id.
+                    if "speaker_label" in item:
+                        label = item['speaker_label'].replace('spk','speaker')
+                        sentence += f" <{label}>"
                     # Add word to sentence with heading space
-                    sentence += f"{ item['alternatives'][0]['content'] }"
+                    sentence += f" { item['alternatives'][0]['content'] }"
                     # Set the start time of the sentence to be the start time of this first word in the sentence
                     sentence_start_time  = word_start_time
+                # If this is mid of sentence
                 else:
                     # Add word to sentence with heading space
                     sentence += f" { item['alternatives'][0]['content'] }"

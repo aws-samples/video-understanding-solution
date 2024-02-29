@@ -26,6 +26,7 @@ export class VideoTable extends Component {
       videos: [],
       pages: {},
       firstFetch: false,
+      pageLoading: false,
       searchByNameText: "",
       searchByStartDate: null,
       searchByEndDate: null,
@@ -62,10 +63,14 @@ export class VideoTable extends Component {
   async fetchVideos(page){
     var videos = []
 
+    this.setState({
+      pageLoading: true
+    })
+
     // Construct filter
     var params = `?page=${page.toString()}&`
     if(this.state.searchByNameText != ""){
-      params += `videoNameStartsWith=${encodeURI(this.state.searchByNameText)}&`
+      params += `videoNameContains=${encodeURI(this.state.searchByNameText)}&`
     }
     if(this.state.searchByStartDate != null && this.state.searchByStartDate != null ){
       const startDateString = this.state.searchByStartDate.toISOString()
@@ -144,6 +149,10 @@ export class VideoTable extends Component {
       } 
     }
     
+    this.setState({
+      pageLoading: false
+    })
+
     return [videos, pages]
   }
 
@@ -578,7 +587,7 @@ export class VideoTable extends Component {
               <InputGroup className="mb-3">
                 <Form.Control
                   type="text"
-                  placeholder="Video name starts with . . ."
+                  placeholder="Video name contains . . ."
                   aria-label="SearchName"
                   onChange={this.handleSearchByNameTextChange.bind(this)}
                   value={this.state.searchByNameText}
@@ -619,6 +628,7 @@ export class VideoTable extends Component {
           </Col></Row>
           <Row><Col>
             <Accordion>
+              { this.state.pageLoading ? <Spinner className="page-spinner" animation="grow" variant="info" role="status"><span className="visually-hidden">Fetching videos ...</span></Spinner> : '' }
               { Object.keys(this.state.pages).length > 0 && this.state.videos.length > 0 ? this.renderVideoTableBody() : ""}
               { this.state.firstFetch && Object.keys(this.state.pages).length == 0 && this.state.videos.length == 0 ? <p>Found no relevant video in S3 "{this.rawFolder}" folder</p> : ""}
             </Accordion>

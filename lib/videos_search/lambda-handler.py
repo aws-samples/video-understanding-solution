@@ -43,15 +43,15 @@ def handler(event, context):
     params = event["queryStringParameters"]
     
     page = int(params["page"])
-    video_name_starts_with = urllib.parse.unquote(params["videoNameStartsWith"]) if "videoNameStartsWith" in params else None
+    video_name_contains = urllib.parse.unquote(params["videoNameContains"]) if "videoNameContains" in params else None
     uploaded_between= urllib.parse.unquote(params["uploadedBetween"]) if "uploadedBetween" in params else None
     about = urllib.parse.unquote(params["about"]) if "about" in params else None
    
     # Use SQLAlchemy to search videos with the 3 filters above.
     videos = session.query(Videos.name)
-    if video_name_starts_with is not None:
-        video_name_starts_with_param = bindparam("name")
-        videos = videos.filter(Videos.name.like(video_name_starts_with_param))
+    if video_name_contains is not None:
+        video_name_contains_param = bindparam("name")
+        videos = videos.filter(Videos.name.like(video_name_contains_param))
     if uploaded_between is not None:
         # Assume uploaded_between is like 2024-02-07T16:00:00.000Z|2024-02-15T16:00:00.000Z
         start, stop = uploaded_between.split("|")
@@ -62,15 +62,9 @@ def handler(event, context):
         videos = videos.filter(Videos.uploaded_at.between(start_param, stop_param))
     if about is not None:
         # Get the embedding for the video topic
-        #body = json.dumps(
-        #    {
-        #        "inputText": about,
-        #    }
-        #)
         body = json.dumps({
             "texts":[about],
             "input_type": "search_query",
-            #"truncate": "LEFT"
         })
         call_done = False
         while(not call_done):
@@ -85,12 +79,17 @@ def handler(event, context):
 
         # Disabling semgrep rule for checking data size to be loaded to JSON as the source is from Amazon Bedrock
         # nosemgrep: python.aws-lambda.deserialization.tainted-json-aws-lambda.tainted-json-aws-lambda
-        about_embedding = json.loads(response.get("body").read().decode())['embeddings'][0] #["embedding"]
+        about_embedding = json.loads(response.get("body").read().decode())['embeddings'][0]
 
         videos = videos.filter(Videos.summary_embedding.cosine_distance(about_embedding) < acceptable_embedding_distance)
+        videos = videos.order_by(Videos.summary_embedding.cosine_distance(about_embedding))
+    
+    if uploaded_between is not None:
+        videos = videos.order_by(Videos.uploaded_at.desc())
 
-    if video_name_starts_with is not None:
-       videos = videos.params(name=f"{video_name_starts_with}%")
+
+    if video_name_contains is not None:
+       videos = videos.params(name=f"%{video_name_contains}%")
     if uploaded_between is not None:
        videos = videos.params(start=start, stop=stop)
 
@@ -114,9 +113,7 @@ def handler(event, context):
         "statusCode": 200,
         "headers": {
             "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "*",
-            "Access-Control-Allow-Methods": "*"
+            "Access-Control-Allow-Origin": "*"
         },
         "body": json.dumps(response_payload)
     }

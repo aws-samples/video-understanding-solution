@@ -1,6 +1,9 @@
 .preserve-line-breaks {
     white-space: pre-wrap;
 }
+.page-spinner{
+    margin-top: 100px;
+}
 .chat-spinner{
     margin-bottom: 5px;
 }

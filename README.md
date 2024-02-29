@@ -2,9 +2,9 @@
 
 ## Introduction
 
-This is a deployable solution which can help save your time in understanding the videos you have without having to watch every video. This solution automatically generate AI-powered summary and entities extraction of each video uploaded to your Amazon Simple Storage Service (S3) bucket. Not only that, it also allows you to ask questions about the video in a UI chatbot experience, like "What is funny or interesting about the video?", "At which seconds does it talk about company's vision?". You can also use the search filter to search for videos using generative-AI-powered content/meaning similarity e.g. "video about Amazon's history". This solution extracts information from visual scenes, audio, and visible text in the video. 
+This is a deployable solution which can help save your time in understanding the videos you have without having to watch every video. This solution automatically generate AI-powered summary and entities extraction of each video uploaded to your Amazon Simple Storage Service (S3) bucket. It also allows you to ask questions about the video in a UI chatbot experience, like "What is funny or interesting about the video?" and "Is Jeff Bezos smiling in this video?". You can also use the search filter to search for videos using generative-AI-powered semantic search e.g. "video about Amazon's history". This solution extracts information from visual scenes, audio, visible texts, and detected celebrities or faces in the video. 
 
-You can upload videos to your S3 bucket by using AWS console, CLI, SDK, or other means (e.g. via AWS Transfer Family). This solution will automatically trigger processes by Amazon Rekognition and Amazon Transcribe to extract the visual scenes and texts and the audio transcription. This combined information is used to generate the summary and entities extraction as powered by generative AI with Amazon Bedrock. The UI chatbot also uses Amazon Bedrock to allows you to ask questions about the videos. The summaries, entities, and combined extracted information are stored in S3 bucket, available to be used for further custom analytics. Refer to the diagram below on the architecture.
+You can upload videos to your S3 bucket by using AWS console, CLI, SDK, or other means (e.g. via AWS Transfer Family). This solution will automatically trigger processes by Amazon Rekognition and Amazon Transcribe to extract the visual scenes and texts and the audio transcription. When "Person" object is identified from the visual scene extraction, it will use celebrity and face detection by Amazon Rekognition. This combined information is used to generate the summary and entities extraction as powered by generative AI with Amazon Bedrock. The UI chatbot also uses Amazon Bedrock for the Q&A chatbot. The summaries, entities, and combined extracted information are stored in S3 bucket, available to be used for further custom analytics. Refer to the diagram below on the architecture.
 
 ![Architecture](./assets/architecture.jpg)
 
@@ -72,7 +72,7 @@ The cost of using this solution is determined by the pricing and usage of the co
 
 2. More variable components (driven mainly by the total number of video minutes being processed and the activities e.g. chat):
 
-    2.1. Amazon Rekognition - Pricing is [here](https://aws.amazon.com/rekognition/pricing/). You may be eligible for its FREE TIER for video analysis. This solution uses Stored Video Analysis for Label Detection and Text Detection. The cost can vary based on the video duration and the number of videos being processed.
+    2.1. Amazon Rekognition - Pricing is [here](https://aws.amazon.com/rekognition/pricing/). You may be eligible for its FREE TIER for video analysis. This solution uses Stored Video Analysis for Label Detection and Text Detection. When "Person" object is detected, it also calls the DetectFaces and RecognizeCelebrities image APIs. The cost can vary based on the video duration, the number of videos being processed, and the richness of information in the video.
 
     2.2. Amazon Transcribe - Pricing is [here](https://aws.amazon.com/transcribe/pricing/). Youo may be eligible for its FREE TIER. This solution uses Standard Batch transcription. The cost can vary based on the video duration and the number of videos being processed.
 
@@ -92,8 +92,8 @@ It is recommended to test with smaller number of shorter videos first and observ
 ## Limitations
 
 1. Currently only .mp4/.MP4 video files are supported
-2. This solution is only tested on English videos.
-3. Videos under 15 minutes work best. Longer video currently may have higher chat reply latency.
+2. The language supported is limited by the language supported by Amazon Rekognition text detection, Amazon Transcribe, and the models used in Amazon Bedrock.
+3. Summary generation and entity extraction is tested for video up to 3+ hours. However, the chat feature works best for video under 15 minutes in terms of latency.
 4. Video file names (when uploaded) must adhere to the [S3 object key pattern](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html). When uploaded via this solution's UI, it will automatically convert non-compliant characters to _ (underscore).
 
 ## Removal
