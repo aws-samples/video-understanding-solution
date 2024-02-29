@@ -441,6 +441,7 @@ class VideoAnalyzer(ABC):
         self.bucket_name: str = bucket_name
         self.summary_folder: str = summary_folder
         self.entity_sentiment_folder: str = entity_sentiment_folder
+        self.video_script_folder: str = video_script_folder
         self.video_name: str = video_name
         self.video_path: str = video_path
         self.original_visual_objects: dict[int, list[str]] = visual_objects
@@ -950,7 +951,7 @@ class VideoAnalyzer(ABC):
 
             start = 0 if is_first_chunk else int(chunk_number*self.video_script_storage_chunk_size)
             stop = video_script_length if is_last_chunk else (chunk_number+1)*self.video_script_storage_chunk_size
-            chunk_string = video_script[start:stop]
+            chunk_string = self.video_script[start:stop]
         
             # So long as this is not the first chunk, remove whatever before first \n since likely the chunk cutting is not done exactly at the \n
             if not is_first_chunk:
@@ -960,7 +961,7 @@ class VideoAnalyzer(ABC):
                     pass
             
             # Get the embedding for the chunk
-            chunk_embedding = call_embedding_llm(chunk_string)
+            chunk_embedding = self.call_embedding_llm(chunk_string)
             
             # Create database object
             chunks.append(self.Contents(
