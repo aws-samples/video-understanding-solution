@@ -114,24 +114,32 @@ class CelebrityFinding():
         self.match_confidence: int = int(celebrity_dict['MatchConfidence'])
         self.smile: bool = bool(celebrity_dict['Face']['Smile']['Value'])
         self.smile_confidence: int = int(celebrity_dict['Face']['Smile']['Confidence'])
-        self.emotions: list[str] = filter(lambda em: (len(em) > 0),[emo['Type'].lower() if int(emo['Confidence']) >= celebrity_emotion_confidence_threshold else '' for emo in celebrity_dict['Face']['Emotions']])
+        self.emotions: list[str] = list(filter(lambda em: (len(em) > 0),[emo['Type'].lower() if int(emo['Confidence']) >= self.celebrity_emotion_confidence_threshold else '' for emo in celebrity_dict['Face']['Emotions']]))
         self.top: float = float(celebrity_dict['Face']['BoundingBox']['Top'])
+        self.top_display: str = str(round(self.top, 2))
         self.left: float = float(celebrity_dict['Face']['BoundingBox']['Left'])
+        self.left_display: str = str(round(self.left, 2))
         self.height: float = float(celebrity_dict['Face']['BoundingBox']['Height'])
+        self.height_display: str = str(round(self.height, 2))
         self.width: float = float(celebrity_dict['Face']['BoundingBox']['Width'])
+        self.width_display: str = str(round(self.width, 2))
 
     def is_matching_face(self, bb_top:float , bb_left: float, bb_height: float, bb_width: float) -> bool:
-        return (abs(self.top - bb_top) <= face_bounding_box_overlap_threshold) and
-        (abs(self.left - bb_left) <= face_bounding_box_overlap_threshold) and
-        (abs(self.height - bb_height) <= face_bounding_box_overlap_threshold) and
-        (abs(self.width - bb_width) <= face_bounding_box_overlap_threshold)
+        return (
+            (abs(self.top - bb_top) <= self.face_bounding_box_overlap_threshold) and
+            (abs(self.left - bb_left) <= self.face_bounding_box_overlap_threshold) and
+            (abs(self.height - bb_height) <= self.face_bounding_box_overlap_threshold) and
+            (abs(self.width - bb_width) <= self.face_bounding_box_overlap_threshold)
+        )
 
     def display(self) -> str:
         display_string = self.name
         if len(self.emotions) > 0:
             display_string += "|" + "-".join(self.emotions)
-        if self.smile_confidence >= celebrity_feature_confidence_threshold: 
+        if self.smile_confidence >= self.celebrity_feature_confidence_threshold: 
             display_string += "|smiling" if self.smile else "|not smiling"
+        display_string += f"|face is located {self.left_display} from left - {self.top_display} from top - with height {self.height_display} and width {self.width_display} of the video frame"
+
         return display_string
 
 class FaceFinding():
@@ -144,16 +152,16 @@ class FaceFinding():
         self.confidence: int = int(face_dict['Confidence'])
         self.age_low: int = int(face_dict['AgeRange']['Low'])
         self.age_high: int = int(face_dict['AgeRange']['High'])
-        self.top: float = float(face_dict['FaceDetails']['BoundingBox']['Top'])
+        self.top: float = float(face_dict['BoundingBox']['Top'])
         self.top_display: str = str(round(self.top, 2))
-        self.left: float = float(face_dict['FaceDetails']['BoundingBox']['Left'])
+        self.left: float = float(face_dict['BoundingBox']['Left'])
         self.left_display: str = str(round(self.left, 2))
-        self.height: float = float(face_dict['FaceDetails']['BoundingBox']['Height'])
+        self.height: float = float(face_dict['BoundingBox']['Height'])
         self.height_display: str = str(round(self.height, 2))
-        self.width: float = float(face_dict['FaceDetails']['BoundingBox']['Width'])
+        self.width: float = float(face_dict['BoundingBox']['Width'])
         self.width_display: str = str(round(self.width, 2))
         self.beard: bool = bool(face_dict['Beard']['Value'])
-        self.beard: int = int(face_dict['Beard']['Confidence'])
+        self.beard_confidence: int = int(face_dict['Beard']['Confidence'])
         self.eyeglasses: bool = bool(face_dict['Eyeglasses']['Value'])
         self.eyeglasses_confidence: int = int(face_dict['Eyeglasses']['Confidence'])
         self.eyesopen: bool = bool(face_dict['EyesOpen']['Value'])
@@ -168,38 +176,38 @@ class FaceFinding():
         self.mustache_confidence: int = int(face_dict['Mustache']['Confidence'])
         self.gender: str = str(face_dict['Gender']['Value']).lower()
         self.gender_confidence: int = int(face_dict['Gender']['Confidence'])
-        self.emotions: list[str] = filter(lambda em: (len(em) > 0),[emo['Type'].lower() if int(emo['Confidence']) >= face_emotion_confidence_threshold else '' for emo in face_dict['Emotions']])
+        self.emotions: list[str] = list(filter(lambda em: (len(em) > 0),[emo['Type'].lower() if int(emo['Confidence']) >= self.face_emotion_confidence_threshold else '' for emo in face_dict['Emotions']]))
 
-        def is_duplicate(self, face_list: list[Self]) -> bool:
-            found = False
-            face_finding: Self
-            for face_finding in face_list:
-                if (abs(self.age_low - face_finding.age_low) <= face_age_range_match_threshold) and (abs(self.age_high - face_finding.age_high) <= face_age_range_match_threshold): found = True
-            return found
+    def is_duplicate(self, face_list: list[Self]) -> bool:
+        found = False
+        face_finding: Self
+        for face_finding in face_list:
+            if (abs(self.age_low - face_finding.age_low) <= self.face_age_range_match_threshold) and (abs(self.age_high - face_finding.age_high) <= self.face_age_range_match_threshold): found = True
+        return found
 
-        def display(self) -> str:
-            display_string = f"{self.age_low}-{self.age_high} years old"
-            if self.gender_confidence >= face_feature_confidence_threshold:
-                display_string += f"|{self.gender}"
-            if len(self.emotions) > 0:
-                display_string += "|" + "-".join(self.emotions)
-            if self.smile_confidence >= face_feature_confidence_threshold:
-                display_string += "|smiling" if self.smile else "|not smiling"
-            if self.beard_confidence >= face_feature_confidence_threshold:
-                display_string += "|has beard" if self.beard else "|no beard"
-            if self.mustache_confidence >= face_feature_confidence_threshold:
-                display_string += "|has mustache" if self.mustache else "|no mustache"
-            if self.sunglasses_confidence >= face_feature_confidence_threshold:
-                display_string += "|wears sunglasses" if self.sunglasses else "|no sunglasses"
-            if self.eyeglasses_confidence >= face_feature_confidence_threshold:
-                display_string += "|wears eyeglasses" if self.eyeglasses else "|no eyeglasses"
-            if self.mouthopen_confidence >= face_feature_confidence_threshold:
-                display_string += "|mouth is open" if self.mouthopen else "|mouth is closed"
-            if self.eyesopen_confidence >= face_feature_confidence_threshold:
-                display_string += "|eyes are open" if self.eyesopen else "|eyes is closed"
-            display_string += f"|face is located {self.left_display} from left - {self.top_display} from top - with height {self.height_display} and width {self.width_display} of the video frame"
-            
-            return display_string
+    def display(self) -> str:
+        display_string = f"{self.age_low}-{self.age_high} years old"
+        if self.gender_confidence >= self.face_feature_confidence_threshold:
+            display_string += f"|{self.gender}"
+        if len(self.emotions) > 0:
+            display_string += "|" + "-".join(self.emotions)
+        if self.smile_confidence >= self.face_feature_confidence_threshold:
+            display_string += "|smiling" if self.smile else "|not smiling"
+        if self.beard_confidence >= self.face_feature_confidence_threshold:
+            display_string += "|has beard" if self.beard else "|no beard"
+        if self.mustache_confidence >= self.face_feature_confidence_threshold:
+            display_string += "|has mustache" if self.mustache else "|no mustache"
+        if self.sunglasses_confidence >= self.face_feature_confidence_threshold:
+            display_string += "|wears sunglasses" if self.sunglasses else "|no sunglasses"
+        if self.eyeglasses_confidence >= self.face_feature_confidence_threshold:
+            display_string += "|wears eyeglasses" if self.eyeglasses else "|no eyeglasses"
+        if self.mouthopen_confidence >= self.face_feature_confidence_threshold:
+            display_string += "|mouth is open" if self.mouthopen else "|mouth is closed"
+        if self.eyesopen_confidence >= self.face_feature_confidence_threshold:
+            display_string += "|eyes are open" if self.eyesopen else "|eyes is closed"
+        display_string += f"|face is located {self.left_display} from left - {self.top_display} from top - with height {self.height_display} and width {self.width_display} of the video frame"
+        
+        return display_string
 
 class VideoPreprocessor(ABC):
     def __init__(self, 
@@ -390,14 +398,15 @@ class VideoPreprocessor(ABC):
 
                             # The below code checks if this face is already captured as celebrity by checking the bounding box for the detected celebrities at this frame
                             face_found_in_celebrities_list = False
-                            for celebrity_finding in self.celebrities[timestamp_second]:
-                                if celebrity_finding.is_matching_face(face_finding.top, face_finding.left, face_finding.height, face_finding.width): 
-                                    face_found_in_celebrities_list = True
+                            if timestamp_second in self.celebrities:
+                                for celebrity_finding in self.celebrities[timestamp_second]:
+                                    if celebrity_finding.is_matching_face(face_finding.top, face_finding.left, face_finding.height, face_finding.width): 
+                                        face_found_in_celebrities_list = True
 
                             # Only add if the face is not found in the celebrity list
                             if not face_found_in_celebrities_list:
                                 # Only add if there is no other face with similar age range at the same second.
-                                if not self.is_duplicate(self.faces[timestamp_second]):
+                                if not face_finding.is_duplicate(self.faces[timestamp_second]):
                                     self.faces[timestamp_second].append(face_finding)
 
     def wait_for_dependencies(self):
@@ -567,10 +576,10 @@ class VideoAnalyzer(ABC):
                 self.transcript = sorted(transcript.items())
     
     def preprocess_celebrities(self):
-        self.celebrities = sorted(dict([(timestamp_second, celebrity_finding.display()) for timestamp_second, celebrity_finding in self.original_celebrities.items()]))
+        self.celebrities = sorted(self.original_celebrities.items())
 
     def preprocess_faces(self):
-        self.faces = sorted(dict([(timestamp_second, face_finding.display()) for timestamp_second,face_finding in self.original_faces.items()]))
+        self.faces = sorted(self.original_faces.items())
       
     def generate_combined_video_script(self):
         def transform_scenes(x):
@@ -593,13 +602,13 @@ class VideoAnalyzer(ABC):
 
         def transform_celebrities(x):
             timestamp = x[0]
-            celebrities = ",".join(x[1])
+            celebrities = ",".join([celeb_finding.display() for celeb_finding in x[1]])
             return (timestamp, f"Celebrity:{celebrities}")
         visual_celebrities = list(map(transform_celebrities, self.celebrities))
 
         def transform_faces(x):
             timestamp = x[0]
-            faces = ",".join(x[1])
+            faces = ",".join([face_finding.display() for face_finding in x[1]])
             return (timestamp, f"Face:{faces}")
         visual_faces = list(map(transform_faces, self.faces))
  
@@ -618,8 +627,8 @@ class VideoAnalyzer(ABC):
                         "Visual scenes (scene) represents what objects are visible in the video at that second. This can be the objects seen in camera, or objects from a screen sharing, or any other visual scenarios. You can infer how the visualization look like, so long as you are confident.\n" \
                         "Visual texts (text) are the text visible in the video. It can be texts in real world objects as recorded in video camera, or those from screen sharing, or those from presentation recording, or those from news, movies, or others. \n" \
                         "Human voice (voice) is the transcription of the video.\n" \
-                        "Celebrities (celebrity) provides information about the celebrity detected in the video at that second and (if any) their visible detected emotions. For example: Jeff Bezos|happy-surprised,Andy Jassy|calm,Jeff Barr \n" \
-                        "Human faces (face) lists the face seen in the video at that second, the gender (if detected), and whether the person smiles or not (if detected). For example: 23-29 years old|male|smiling,31-33 years old|not smiling,44-49 years old. \n"
+                        "Celebrities (celebrity) provides information about the celebrity detected in the video at that second. It may have the information on whether the celebrity is smiling and the captured emotions. It may also has information on where the face is located relative to the video frame size. The celebrity may not be speaking as he/she may just be portrayed. \n" \
+                        "Human faces (face) lists the face seen in the video at that second. This may have information on the emotions, face location relative to the video frame, and more facial features. \n"
 
         video_script_length = len(self.combined_video_script)
 
@@ -726,8 +735,8 @@ class VideoAnalyzer(ABC):
                         "Visual scenes (scene) represents what objects are visible in the video at that second. This can be the objects seen in camera, or objects from a screen sharing, or any other visual scenarios. You can infer how the visualization look like, so long as you are confident.\n" \
                         "Visual texts (text) are the text visible in the video. It can be texts in real world objects as recorded in video camera, or those from screen sharing, or those from presentation recording, or those from news, movies, or others. \n" \
                         "Human voice (voice) is the transcription of the video.\n" \
-                        "Celebrities (celebrity) provides information about the celebrity detected in the video at that second and (if any) their visible detected emotions. For example: Jeff Bezos|happy-surprised,Andy Jassy|calm,Jeff Barr \n" \
-                        "Human faces (face) lists the face seen in the video at that second, the gender (if detected), and whether the person smiles or not (if detected). For example: 23-29 years old|male|smiling,31-33 years old|not smiling,44-49 years old. \n"
+                        "Celebrities (celebrity) provides information about the celebrity detected in the video at that second. It may have the information on whether the celebrity is smiling and the captured emotions. It may also has information on where the face is located relative to the video frame size. The celebrity may not be speaking as he/she may just be portrayed. \n" \
+                        "Human faces (face) lists the face seen in the video at that second. This may have information on the emotions, face location relative to the video frame, and more facial features. \n"
                         
         
         video_script_length = len(self.combined_video_script)
@@ -890,7 +899,7 @@ class VideoAnalyzer(ABC):
         session.execute(update_stmt)
         session.commit()
 
-    def store_sentiment_result():
+    def store_sentiment_result(self):
         # Extract entities and sentiment from the string
         entities_dict: dict[str, dict[str, str]] = {}
         entity_regex = r"\n*([^|\n]+?)\|\s*(positive|negative|neutral|mixed|N\/A)\s*\|([^|\n]+?)\n"
