@@ -592,7 +592,11 @@ class VideoUnderstandingSolutionStack(Stack):
                         ),
                         _iam.PolicyStatement(
                             actions=["s3:GetObject", "s3:ListBucket"],
-                            resources=[video_bucket_s3.bucket_arn, video_bucket_s3.arn_for_objects(f"{transcription_folder}/*")],
+                            resources=[
+                                video_bucket_s3.bucket_arn, 
+                                video_bucket_s3.arn_for_objects(f"{transcription_folder}/*"),
+                                video_bucket_s3.arn_for_objects(f"{raw_folder}/*")
+                            ],
                             effect=_iam.Effect.ALLOW,
                         ),
                         _iam.PolicyStatement(

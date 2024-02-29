@@ -6,7 +6,7 @@ from sqlalchemy import create_engine, Column, DateTime, String, Text, Integer, f
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import mapped_column, sessionmaker
 from pgvector.sqlalchemy import Vector
-from typing import Union
+from typing import Union, Self
 import cv2
 import base64
 from PIL import Image
@@ -74,8 +74,8 @@ def handler():
         
         # Initiate class for video analysis
         video_analyzer = VideoAnalyzerBedrock(
-            model_name=model_name, 
-            embedding_model_name=embedding_model_name,
+            model_name=model_id, 
+            embedding_model_name=embedding_model_id,
             bucket_name=bucket_name,
             video_name=video_name,
             video_path=video_path,
@@ -102,6 +102,104 @@ def handler():
         'statusCode': 200,
         'body': json.dumps({"main_analyzer": "success"})
     }
+
+class CelebrityFinding():
+    celebrity_match_confidence_threshold: int = 97
+    face_bounding_box_overlap_threshold: float = 0.1
+    celebrity_emotion_confidence_threshold: int = 85
+    celebrity_feature_confidence_threshold: int = 90
+
+    def __init__(self, celebrity_dict: dict):
+        self.name: str = celebrity_dict['Name']
+        self.match_confidence: int = int(celebrity_dict['MatchConfidence'])
+        self.smile: bool = bool(celebrity_dict['Face']['Smile']['Value'])
+        self.smile_confidence: int = int(celebrity_dict['Face']['Smile']['Confidence'])
+        self.emotions: list[str] = filter(lambda em: (len(em) > 0),[emo['Type'].lower() if int(emo['Confidence']) >= celebrity_emotion_confidence_threshold else '' for emo in celebrity_dict['Face']['Emotions']])
+        self.top: float = float(celebrity_dict['Face']['BoundingBox']['Top'])
+        self.left: float = float(celebrity_dict['Face']['BoundingBox']['Left'])
+        self.height: float = float(celebrity_dict['Face']['BoundingBox']['Height'])
+        self.width: float = float(celebrity_dict['Face']['BoundingBox']['Width'])
+
+    def is_matching_face(self, bb_top:float , bb_left: float, bb_height: float, bb_width: float) -> bool:
+        return (abs(self.top - bb_top) <= face_bounding_box_overlap_threshold) and
+        (abs(self.left - bb_left) <= face_bounding_box_overlap_threshold) and
+        (abs(self.height - bb_height) <= face_bounding_box_overlap_threshold) and
+        (abs(self.width - bb_width) <= face_bounding_box_overlap_threshold)
+
+    def display(self) -> str:
+        display_string = self.name
+        if len(self.emotions) > 0:
+            display_string += "|" + "-".join(self.emotions)
+        if self.smile_confidence >= celebrity_feature_confidence_threshold: 
+            display_string += "|smiling" if self.smile else "|not smiling"
+        return display_string
+
+class FaceFinding():
+    face_detection_confidence_threshold: int = 97
+    face_feature_confidence_threshold: int = 97
+    face_age_range_match_threshold: float = 3
+    face_emotion_confidence_threshold: int = 85
+
+    def __init__(self, face_dict: dict):
+        self.confidence: int = int(face_dict['Confidence'])
+        self.age_low: int = int(face_dict['AgeRange']['Low'])
+        self.age_high: int = int(face_dict['AgeRange']['High'])
+        self.top: float = float(face_dict['FaceDetails']['BoundingBox']['Top'])
+        self.top_display: str = str(round(self.top, 2))
+        self.left: float = float(face_dict['FaceDetails']['BoundingBox']['Left'])
+        self.left_display: str = str(round(self.left, 2))
+        self.height: float = float(face_dict['FaceDetails']['BoundingBox']['Height'])
+        self.height_display: str = str(round(self.height, 2))
+        self.width: float = float(face_dict['FaceDetails']['BoundingBox']['Width'])
+        self.width_display: str = str(round(self.width, 2))
+        self.beard: bool = bool(face_dict['Beard']['Value'])
+        self.beard: int = int(face_dict['Beard']['Confidence'])
+        self.eyeglasses: bool = bool(face_dict['Eyeglasses']['Value'])
+        self.eyeglasses_confidence: int = int(face_dict['Eyeglasses']['Confidence'])
+        self.eyesopen: bool = bool(face_dict['EyesOpen']['Value'])
+        self.eyesopen_confidence: int = int(face_dict['EyesOpen']['Confidence'])
+        self.sunglasses: bool = bool(face_dict['Sunglasses']['Value'])
+        self.sunglasses_confidence: int = int(face_dict['Sunglasses']['Confidence'])
+        self.smile: bool = bool(face_dict['Smile']['Value'])
+        self.smile_confidence: int = int(face_dict['Smile']['Confidence'])
+        self.mouthopen: bool = bool(face_dict['MouthOpen']['Value'])
+        self.mouthopen_confidence: int = int(face_dict['MouthOpen']['Confidence'])
+        self.mustache: bool = bool(face_dict['Mustache']['Value'])
+        self.mustache_confidence: int = int(face_dict['Mustache']['Confidence'])
+        self.gender: str = str(face_dict['Gender']['Value']).lower()
+        self.gender_confidence: int = int(face_dict['Gender']['Confidence'])
+        self.emotions: list[str] = filter(lambda em: (len(em) > 0),[emo['Type'].lower() if int(emo['Confidence']) >= face_emotion_confidence_threshold else '' for emo in face_dict['Emotions']])
+
+        def is_duplicate(self, face_list: list[Self]) -> bool:
+            found = False
+            face_finding: Self
+            for face_finding in face_list:
+                if (abs(self.age_low - face_finding.age_low) <= face_age_range_match_threshold) and (abs(self.age_high - face_finding.age_high) <= face_age_range_match_threshold): found = True
+            return found
+
+        def display(self) -> str:
+            display_string = f"{self.age_low}-{self.age_high} years old"
+            if self.gender_confidence >= face_feature_confidence_threshold:
+                display_string += f"|{self.gender}"
+            if len(self.emotions) > 0:
+                display_string += "|" + "-".join(self.emotions)
+            if self.smile_confidence >= face_feature_confidence_threshold:
+                display_string += "|smiling" if self.smile else "|not smiling"
+            if self.beard_confidence >= face_feature_confidence_threshold:
+                display_string += "|has beard" if self.beard else "|no beard"
+            if self.mustache_confidence >= face_feature_confidence_threshold:
+                display_string += "|has mustache" if self.mustache else "|no mustache"
+            if self.sunglasses_confidence >= face_feature_confidence_threshold:
+                display_string += "|wears sunglasses" if self.sunglasses else "|no sunglasses"
+            if self.eyeglasses_confidence >= face_feature_confidence_threshold:
+                display_string += "|wears eyeglasses" if self.eyeglasses else "|no eyeglasses"
+            if self.mouthopen_confidence >= face_feature_confidence_threshold:
+                display_string += "|mouth is open" if self.mouthopen else "|mouth is closed"
+            if self.eyesopen_confidence >= face_feature_confidence_threshold:
+                display_string += "|eyes are open" if self.eyesopen else "|eyes is closed"
+            display_string += f"|face is located {self.left_display} from left - {self.top_display} from top - with height {self.height_display} and width {self.width_display} of the video frame"
+            
+            return display_string
 
 class VideoPreprocessor(ABC):
     def __init__(self, 
@@ -131,12 +229,7 @@ class VideoPreprocessor(ABC):
         self.person_timestamps_millis: list[int] = []
         self.maximum_number_of_objects_per_timestamp_second: int = 50
         self.maximum_number_of_texts_per_timestamp_second: int = 50
-        self.celebrity_match_confidence_threshold: int = 97
-        self.celebrity_emotion_threshold: int = 85
-        self.face_detection_confidence_threshold: int = 97
-        self.face_bounding_box_overlap_threshold: float = 0.1
-        self.face_age_range_match_threshold: float = 3
-    
+
     def wait_for_rekognition_label_detection(self, sort_by):
         get_object_detection = self.rekognition.get_label_detection(JobId=self.labels_job_id, SortBy=sort_by)
         while(get_object_detection['JobStatus'] == 'IN_PROGRESS'):
@@ -270,74 +363,42 @@ class VideoPreprocessor(ABC):
 
                 # Call Rekognition to detect celebrity
                 recognize_celebrity_response: dict = self.rekognition.recognize_celebrities(Image={'Bytes': image})
-                celebrity_faces: list[dict] = recognize_celebrity_response["CelebrityFaces"]
+                celebrity_findings: list[dict] = recognize_celebrity_response["CelebrityFaces"]
                 unrecognized_faces: list[dict] = recognize_celebrity_response["UnrecognizedFaces"]
                 
                 # Parse Rekognition celebrity detection data and add to dictionary as appropriate
-                celebrities_bounding_boxes: list[list[float]] = []
-                if len(celebrity_faces) > 0:
+                if len(celebrity_findings) > 0:
                     if timestamp_second not in self.celebrities: self.celebrities[timestamp_second] = []
-                    celebrity_face: dict
-                    for celebrity_face in celebrity_faces:
-                        if int(celebrity_face["MatchConfidence"]) < self.celebrity_match_confidence_threshold: continue
-                        celebrity_datum: str = celebrity_face['Name']
-                        
-                        # Form a string like "calm-happy"
-                        celebrity_emotions: str = "-".join(filter(lambda em: (len(em) > 0),[emo['Type'].lower() if int(emo['Confidence']) >= self.celebrity_emotion_threshold else '' for emo in celebrity_face['Face']['Emotions']]))
-                        
-                        if celebrity_emotions != '': celebrity_datum += f"|{celebrity_emotions}"
-                        
-                        self.celebrities[timestamp_second].append(celebrity_datum)
-                        bounding_boxes: dict = celebrity_face['Face']['BoundingBox']
-                        celebrities_bounding_boxes.append([float(bounding_boxes['Top']), float(bounding_boxes['Left']), float(bounding_boxes['Height']), float(bounding_boxes['Width'])])
+                    celebrity_finding_dict: dict
+                    for celebrity_finding_dict in celebrity_findings:
+                        if int(celebrity_finding_dict["MatchConfidence"]) < CelebrityFinding.celebrity_match_confidence_threshold: continue
+                        celebrity_finding = CelebrityFinding(celebrity_finding_dict)
+                        self.celebrities[timestamp_second].append(celebrity_finding)
 
                 # Only call the detect face APU if there are other faces beside the recognized celebrity in this frame
                 # This also applies when there is 0 celebrity detected, but there are more faces in the frame.
                 if len(unrecognized_faces) > 0:
                     # Call Rekognition to detect faces
-                    faces: dict = self.rekognition.detect_faces(Image={'Bytes': image},Attributes=['DEFAULT','AGE_RANGE','GENDER', 'SMILE'])['FaceDetails']
+                    face_findings: dict = self.rekognition.detect_faces(Image={'Bytes': image},Attributes=['ALL'])['FaceDetails']
 
-                    if len(faces) > 0:
+                    if len(face_findings) > 0:
                         if timestamp_second not in self.faces: self.faces[timestamp_second] = []
-                        face: dict
-                        for face in faces:
-                            if int(face["Confidence"]) < self.face_detection_confidence_threshold : continue
-                            age_low = int(face['AgeRange']['Low'])
-                            age_high= int(face['AgeRange']['High'])
-                            face_datum: str = f"{age_low}-{age_high} years old"
-                            if int(face['Gender']['Confidence']) >= self.face_detection_confidence_threshold: face_datum += f"|{face['Gender']['Value']}"
-                            if int(face['Smile']['Confidence']) >= self.face_detection_confidence_threshold: face_datum += f"|{'smiling' if face['Smile']['Value'] else 'not smiling'}"
-                            
+                        face_finding_dict: dict
+                        for face_finding_dict in face_findings:
+                            if int(face_finding_dict["Confidence"]) < FaceFinding.face_detection_confidence_threshold : continue
+                            face_finding = FaceFinding(face_finding_dict)
+
                             # The below code checks if this face is already captured as celebrity by checking the bounding box for the detected celebrities at this frame
-                            bounding_boxes: dict = face['BoundingBox']
-                            top, left, height, width = float(bounding_boxes['Top']), float(bounding_boxes['Left']), float(bounding_boxes['Height']), float(bounding_boxes['Width'])
                             face_found_in_celebrities_list = False
-                            for celeb_bounding_box in celebrities_bounding_boxes:
-                                if (
-                                    (abs(celeb[0] - top) <= self.face_bounding_box_overlap_threshold) and
-                                    (abs(celeb[1] - left) <= self.face_bounding_box_overlap_threshold) and
-                                    (abs(celeb[2] - height) <= self.face_bounding_box_overlap_threshold) and
-                                    (abs(celeb[3] - width) <= self.face_bounding_box_overlap_threshold)
-                                ):
+                            for celebrity_finding in self.celebrities[timestamp_second]:
+                                if celebrity_finding.is_matching_face(face_finding.top, face_finding.left, face_finding.height, face_finding.width): 
                                     face_found_in_celebrities_list = True
 
                             # Only add if the face is not found in the celebrity list
                             if not face_found_in_celebrities_list:
                                 # Only add if there is no other face with similar age range at the same second.
-                                if not self.find_face_duplicate_with_age_range(self.faces[timestamp_second], age_low, age_high):
-                                    self.faces[timestamp_second].append(face_datum)
-    
-    def find_face_duplicate_with_age_range(self, face_list: list[str], age_low: int, age_high: int) -> bool:
-        pattern = r"(\d+)-(\d+) years old"
-        found: bool = False
-
-        face_datum: str
-        for face_datum in face_list:
-            match = re.search(pattern, face_datum)
-            if match:
-                if (abs(int(age_low) - int(match.group(1))) <= self.face_age_range_match_threshold) and (abs(int(age_high) - int(match.group(2))) <= self.face_age_range_match_threshold):
-                    found = True
-        return found
+                                if not self.is_duplicate(self.faces[timestamp_second]):
+                                    self.faces[timestamp_second].append(face_finding)
 
     def wait_for_dependencies(self):
         self.wait_for_rekognition_label_detection(sort_by='TIMESTAMP')
@@ -376,13 +437,13 @@ class VideoAnalyzer(ABC):
         self.original_visual_objects: dict[int, list[str]] = visual_objects
         self.original_visual_texts: dict[int, list[str]] = visual_texts
         self.original_transcript: dict = transcript
-        self.original_celebrities: dict[int, list[str]] = celebrities
-        self.original_faces: dict[int, list[str]] = faces
+        self.original_celebrities: dict[int, list[CelebrityFinding]] = celebrities
+        self.original_faces: dict[int, list[FaceFinding]] = faces
         self.visual_objects: list[list[Union[int, list[str]]]] = []
         self.visual_texts: list[list[Union[int, list[str]]]] = []
         self.transcript: list[list[Union[int, str]]] = []
-        self.celebrities: list[list[Union[int, list[str]]]] = []
-        self.faces: list[list[Union[int, list[str]]]] = []
+        self.celebrities:list[list[Union[int, list[str]]]]  = []
+        self.faces: list[list[Union[int, list[str]]]]  = []
         self.video_script_chunk_size_for_summary_generation: int = 100000 # characters
         self.video_script_chunk_overlap_for_summary_generation: int = 500 # characters
         self.video_script_chunk_size_for_entities_extraction: int = 50000 #10000 # characters
@@ -506,10 +567,10 @@ class VideoAnalyzer(ABC):
                 self.transcript = sorted(transcript.items())
     
     def preprocess_celebrities(self):
-        self.celebrities = sorted(self.original_celebrities.items())
+        self.celebrities = sorted(dict([(timestamp_second, celebrity_finding.display()) for timestamp_second, celebrity_finding in self.original_celebrities.items()]))
 
     def preprocess_faces(self):
-        self.faces = sorted(self.original_faces.items())
+        self.faces = sorted(dict([(timestamp_second, face_finding.display()) for timestamp_second,face_finding in self.original_faces.items()]))
       
     def generate_combined_video_script(self):
         def transform_scenes(x):
