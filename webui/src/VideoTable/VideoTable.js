@@ -105,6 +105,7 @@ export class VideoTable extends Component {
         name: videoName,
         loaded: false,
         summary: undefined,
+        rawEntities: undefined,
         entities: undefined,
         videoScript: undefined,
         videoShown: false,
@@ -179,6 +180,7 @@ export class VideoTable extends Component {
     try {
       const response = await this.s3Client.send(command);
       const rawEntities = await response.Body.transformToString();
+      video.rawEntities = rawEntities
       video.entities = []
       rawEntities.split("\n").forEach(entity => {
         const data = entity.split("|")
@@ -248,7 +250,7 @@ export class VideoTable extends Component {
   async retrieveAnswerForShortVideo(video, systemPrompt){
     var [videoScriptPrompt, chatPrompt, closingPrompt] = ["","",""]
 
-    videoScriptPrompt += "Below is the video timeline with information about the voice heard in the video, the visual scenes seen, and the visual text visible."
+    videoScriptPrompt += "Below is the video timeline with information about the voice heard in the video, visual scenes seen, visual text visible, and any face or celebrity detected. "
     videoScriptPrompt += "The numbers on the left represents the seconds into the video where the information was extracted.\n"
     videoScriptPrompt += `<VideoTimeline>\n${video.videoScript}</VideoTimeline>\n\n`
 
@@ -306,7 +308,7 @@ export class VideoTable extends Component {
       var [videoScriptPrompt, chatPrompt, instructionPrompt, partialAnswerPrompt] = ["","","",""]
 
       // Construct the prompt containing the video script (the text representation of the current part of the video)
-      videoScriptPrompt += "The video timeline has information about the voice heard in the video, the visual scenes seen, and the visual text visible. "
+      videoScriptPrompt += "The video timeline has information about the voice heard in the video, visual scenes seen, visual texts visible, and any face or celebrity detected. "
       videoScriptPrompt += "The numbers on the left represents the seconds into the video where the information was extracted.\n"
       videoScriptPrompt += `Because the video is long, the video timeline is split into ${numberOfFragments} parts. `
       if (currentFragment == numberOfFragments){
@@ -393,7 +395,11 @@ export class VideoTable extends Component {
 
     var systemPrompt = "\n\nHuman: You are an expert in analyzing video and you can answer questions about the video given the video timeline. Answer in the same language as the question from user.\n"
     systemPrompt += "Do not quote the whole video timeline row when answering. Assume the user is not aware of the video timeline. Also if you do not know, say do not know. Do not make up wrong answers.\n\n"
-   
+    systemPrompt += "To help you, here is the summary of the whole video that you previously wrote:\n"
+    systemPrompt += `${video.summary}\n\n`
+    systemPrompt += "Also, here are the entities and sentiment that you previously extracted. Each row is entity|sentiment|sentiment's reason:\n"
+    systemPrompt += `${video.rawEntities}\n\n`
+
     if(video.videoScript.length < this.maxCharactersForSingleLLMCall){
       await this.retrieveAnswerForShortVideo(video, systemPrompt) 
     } else {
