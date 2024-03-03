@@ -93,6 +93,10 @@ export class VideoTable extends Component {
     })
 
     const responseBody = await(response.json())
+
+    this.setState({
+      pageLoading: false
+    })
     
     if(responseBody.videos.length == 0) return [videos, this.state.pages];
 
@@ -149,10 +153,6 @@ export class VideoTable extends Component {
         index: page + 1
       } 
     }
-    
-    this.setState({
-      pageLoading: false
-    })
 
     return [videos, pages]
   }
@@ -281,9 +281,11 @@ export class VideoTable extends Component {
     closingPrompt += "\n\nAssistant:"
 
     const prompt = systemPrompt + videoScriptPrompt + chatPrompt + closingPrompt
+
     const input = { 
       body: JSON.stringify({
         prompt: prompt,
+        temperature: 0.1,
         max_tokens_to_sample: 1000,
         stop_sequences: ["\nUser:"]
       }), 
@@ -349,7 +351,7 @@ export class VideoTable extends Component {
       }
 
       if (currentFragment == (numberOfFragments + 1)){
-        instructionPrompt += "Now, since there is no more video part left, provide your final answer directly without XML tag."
+        instructionPrompt += "Now, since there is no more video part left, provide your final answer directly without XML tag. Answer succinctly. Use well-formatted language and do not quote information from video timeline as is, unless asked."
       }else{
         instructionPrompt += "When answering the question, do not use XML tags and do not mention about video timeline, chat summary, or partial answer.\n"
         instructionPrompt += "If you have the final answer already, WRITE |BREAK| at the very end of your answer.\n"
@@ -360,6 +362,7 @@ export class VideoTable extends Component {
       instructionPrompt += "\n\nAssistant:"
 
       const prompt = systemPrompt + videoScriptPrompt + chatPrompt + partialAnswerPrompt + instructionPrompt
+      
       const input = { 
         body: JSON.stringify({
           prompt: prompt,
@@ -393,8 +396,12 @@ export class VideoTable extends Component {
 
     this.addChatWaitingSpinner(video)
 
-    var systemPrompt = "\n\nHuman: You are an expert in analyzing video and you can answer questions about the video given the video timeline. Answer in the same language as the question from user.\n"
-    systemPrompt += "Do not quote the whole video timeline row when answering. Assume the user is not aware of the video timeline. Also if you do not know, say do not know. Do not make up wrong answers.\n\n"
+    var systemPrompt = "\n\nHuman: You are an expert in analyzing video and you can answer questions about the video given the video timeline.\n"
+    systemPrompt += "Answer in the same language as the question from user.\n"
+    systemPrompt += "If you do not know, say do not know. DO NOT make up wrong answers.\n" 
+    systemPrompt += "The Human who asks can watch the video and they are not aware of the 'video timeline' which will be copied below. So, when answering, DO NOT indicate the presence of 'video timeline'. DO NOT quote raw information as is from the 'video timeline'\n"
+    systemPrompt += "When answering, answer SUCCINCTLY and DO NOT provide extra information unless asked.\n"
+    systemPrompt += "Use well-formatted language, sentences, and paragraphs. Use correct grammar and writing rule.\n\n"
     systemPrompt += "To help you, here is the summary of the whole video that you previously wrote:\n"
     systemPrompt += `${video.summary}\n\n`
     systemPrompt += "Also, here are the entities and sentiment that you previously extracted. Each row is entity|sentiment|sentiment's reason:\n"

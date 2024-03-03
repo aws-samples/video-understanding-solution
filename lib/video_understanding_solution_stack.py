@@ -32,8 +32,8 @@ from cdk_nag import AwsSolutionsChecks, NagSuppressions
 model_id = "anthropic.claude-v2:1"
 chat_model_id = "anthropic.claude-instant-v1"
 embedding_model_id = "cohere.embed-multilingual-v3"
-visual_scene_detection_confidence_threshold = 70.0
-visual_text_detection_confidence_threshold = 90.0
+visual_scene_detection_confidence_threshold = 80.0
+visual_text_detection_confidence_threshold = 92.0
 raw_folder = "source"
 summary_folder = "summary"
 video_script_folder = "video_timeline"

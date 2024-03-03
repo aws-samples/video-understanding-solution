@@ -48,59 +48,7 @@ engine = create_engine(f'postgresql://{username}:{password}@{writer_endpoint}:54
 Base = declarative_base()
 
 Session = sessionmaker(bind=engine)  
-session = Session()
-
-def handler():
-    video_name = os.path.basename(video_s3_path)
-    video_path= '/'.join(video_s3_path.split('/')[1:])
-    video_transcript_s3_path = f"{transcription_folder}/{video_path}.txt"
-
-    try:
-        # Initiate class for video preprocessing
-        video_preprocessor = VideoPreprocessor( 
-            labels_job_id=labels_job_id, 
-            texts_job_id=texts_job_id, 
-            transcription_job_name=transcription_job_name,
-            bucket_name=bucket_name,
-            video_s3_path=video_s3_path,
-            video_transcript_s3_path=video_transcript_s3_path
-        )
-        # Wait for extraction jobs to finish
-        video_preprocessor.wait_for_dependencies()
-        
-        # Preprocess and extract information
-        visual_objects, visual_texts, transcript, celebrities, faces = video_preprocessor.run()
-        
-        # Initiate class for video analysis
-        video_analyzer = VideoAnalyzerBedrock(
-            model_name=model_id, 
-            embedding_model_name=embedding_model_id,
-            bucket_name=bucket_name,
-            video_name=video_name,
-            video_path=video_path,
-            visual_objects=visual_objects,
-            visual_texts=visual_texts, 
-            transcript=transcript,
-            celebrities=celebrities,
-            faces=faces,
-            summary_folder=summary_folder,
-            entity_sentiment_folder=entity_sentiment_folder,
-            video_script_folder=video_script_folder
-        )
-        # Run video analysis
-        video_analyzer.run()
-
-        # Store results to S3 and database
-        video_analyzer.store()
-
-    except Exception as err:
-        print(f"Unexpected {err=}, {type(err)=}")
-        raise
-
-    return {
-        'statusCode': 200,
-        'body': json.dumps({"main_analyzer": "success"})
-    }
+session = Session()   
 
 class CelebrityFinding():
     celebrity_match_confidence_threshold: int = 97
@@ -1073,6 +1021,57 @@ class VideoAnalyzerBedrock(VideoAnalyzer):
         embedding = json.loads(response.get("body").read().decode())["embeddings"][0] #["embedding"]
         return embedding
 
+def handler():
+    video_name = os.path.basename(video_s3_path)
+    video_path= '/'.join(video_s3_path.split('/')[1:])
+    video_transcript_s3_path = f"{transcription_folder}/{video_path}.txt"
+
+    try:
+        # Initiate class for video preprocessing
+        video_preprocessor = VideoPreprocessor( 
+            labels_job_id=labels_job_id, 
+            texts_job_id=texts_job_id, 
+            transcription_job_name=transcription_job_name,
+            bucket_name=bucket_name,
+            video_s3_path=video_s3_path,
+            video_transcript_s3_path=video_transcript_s3_path
+        )
+        # Wait for extraction jobs to finish
+        video_preprocessor.wait_for_dependencies()
+        
+        # Preprocess and extract information
+        visual_objects, visual_texts, transcript, celebrities, faces = video_preprocessor.run()
+        
+        # Initiate class for video analysis
+        video_analyzer = VideoAnalyzerBedrock(
+            model_name=model_id, 
+            embedding_model_name=embedding_model_id,
+            bucket_name=bucket_name,
+            video_name=video_name,
+            video_path=video_path,
+            visual_objects=visual_objects,
+            visual_texts=visual_texts, 
+            transcript=transcript,
+            celebrities=celebrities,
+            faces=faces,
+            summary_folder=summary_folder,
+            entity_sentiment_folder=entity_sentiment_folder,
+            video_script_folder=video_script_folder
+        )
+        # Run video analysis
+        video_analyzer.run()
+
+        # Store results to S3 and database
+        video_analyzer.store()
+
+    except Exception as err:
+        print(f"Unexpected {err=}, {type(err)=}")
+        raise
+
+    return {
+        'statusCode': 200,
+        'body': json.dumps({"main_analyzer": "success"})
+    }
 
 if __name__ == "__main__":
     handler()
