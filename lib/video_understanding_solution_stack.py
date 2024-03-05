@@ -881,7 +881,9 @@ class VideoUnderstandingSolutionStack(Stack):
                                 logging_level=_apigw.MethodLoggingLevel.ERROR,
                                 access_log_destination=_apigw.LogGroupLogDestination(rest_access_log_group),
                                 access_log_format=_apigw.AccessLogFormat.clf()
-                            ))
+                            ),
+                            cloud_watch_role=True
+                            )
         
         self.rest_api = rest_api
         self.rest_api_url = rest_api.url
