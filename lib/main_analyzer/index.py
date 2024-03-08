@@ -166,8 +166,9 @@ class VideoPreprocessor(ABC):
         video_transcript_s3_path: str,
         frame_interval: str):
 
-        self.s3 = boto3.client("s3")
-        self.transcribe = boto3.client("transcribe")
+        self.s3_client = boto3.client("s3")
+        self.transcribe_client = boto3.client("transcribe")
+        self.rekognition_client = boto3.client("rekognition")
         self.transcription_job_name: str = transcription_job_name
         self.bucket_name: str = bucket_name
         self.video_s3_path: str = video_s3_path
@@ -188,18 +189,18 @@ class VideoPreprocessor(ABC):
         pass
 
     def wait_for_transcription_job(self):
-        get_transcription = self.transcribe.get_transcription_job(TranscriptionJobName=self.transcription_job_name)
+        get_transcription = self.transcribe_client.get_transcription_job(TranscriptionJobName=self.transcription_job_name)
         while(get_transcription["TranscriptionJob"]["TranscriptionJobStatus"] == 'IN_PROGRESS'):
             time.sleep(5)
-            get_transcription = self.transcribe.get_transcription_job(TranscriptionJobName=self.transcription_job_name)
+            get_transcription = self.transcribe_client.get_transcription_job(TranscriptionJobName=self.transcription_job_name)
     
     def fetch_transcription(self) -> dict:
-        video_transcription_file: dict = self.s3.get_object(Bucket=self.bucket_name, Key=self.video_transcript_s3_path)
+        video_transcription_file: dict = self.s3_client.get_object(Bucket=self.bucket_name, Key=self.video_transcript_s3_path)
         self.transcript = json.loads(video_transcription_file['Body'].read().decode('utf-8'))
 
     def download_video(self) -> str:
         filename: str = os.path.basename(self.video_s3_path)
-        self.s3.download_file(self.bucket_name, self.video_s3_path, filename)
+        self.s3_client.download_file(self.bucket_name, self.video_s3_path, filename)
         return filename
 
     def load_video(self, video_filename: str) -> cv2.VideoCapture:
@@ -219,20 +220,26 @@ class VideoPreprocessor(ABC):
             success, frame = video.read()
             # Resize frame to 512 x 512 px
             dim = self.frame_dim_for_vqa
-            frame = cv2.resize(frame, dim, interpolation = cv2.INTER_AREA)
+            # This may fail if the frame is empty. Just skip the frame if so.
+            try:
+                frame = cv2.resize(frame, dim, interpolation = cv2.INTER_AREA)
+            except:
+                continue
             
             if not success: continue
 
-            image = Image.fromarray(frame)
+            image_pil = Image.fromarray(frame)
             io_stream = io.BytesIO()
-            image.save(io_stream, format='JPEG')
+            image_pil.save(io_stream, format='JPEG')
             image = io_stream.getvalue()
 
-            vqa_response = call_vqa(image) 
+            vqa_response = self.call_vqa(base64.b64encode(image).decode("utf-8")) 
 
-            print(vqa_response)
-
-            parsed_vqa_result = json.load(vqa_response)
+            # Sometimes the response might be censored due to false positive of inappropriate content. When that happens, just skip this frame.
+            try:
+                parsed_vqa_results = json.loads(vqa_response)
+            except:
+                continue
 
             self.visual_scenes[timestamp_millis] = parsed_vqa_results["scene"]
             self.visual_texts[timestamp_millis] = parsed_vqa_results["text"]
@@ -240,7 +247,7 @@ class VideoPreprocessor(ABC):
             if int(parsed_vqa_results["has_face"]) == 1:
 
                 # Call Rekognition to detect celebrity
-                recognize_celebrity_response: dict = self.rekognition.recognize_celebrities(Image={'Bytes': image})
+                recognize_celebrity_response: dict = self.rekognition_client.recognize_celebrities(Image={'Bytes': image})
                 celebrity_findings: list[dict] = recognize_celebrity_response["CelebrityFaces"]
                 unrecognized_faces: list[dict] = recognize_celebrity_response["UnrecognizedFaces"]
                 
@@ -258,7 +265,7 @@ class VideoPreprocessor(ABC):
                 if len(unrecognized_faces) == 0: continue
 
                 # Call Rekognition to detect faces
-                face_findings: dict = self.rekognition.detect_faces(Image={'Bytes': image}, Attributes=['ALL'])['FaceDetails']
+                face_findings: dict = self.rekognition_client.detect_faces(Image={'Bytes': image}, Attributes=['ALL'])['FaceDetails']
 
                 if len(face_findings) == 0: continue
 
@@ -289,16 +296,17 @@ class VideoPreprocessor(ABC):
         self.fetch_transcription()
         return self.visual_scenes, self.visual_texts, self.transcript, self.celebrities, self.faces
 
-class VideoPreprocessorBedrockVQA(ABC):
+class VideoPreprocessorBedrockVQA(VideoPreprocessor):
     def __init__(self, 
         transcription_job_name: str,
         bucket_name: str,
         video_s3_path: str,
         video_transcript_s3_path: str,
-        frame_interval: str):
+        frame_interval: str,
+        vqa_model_name: str
+        ):
 
-        super().__init__(self, 
-            transcription_job_name=transcription_job_name, 
+        super().__init__(transcription_job_name=transcription_job_name, 
             bucket_name=bucket_name,
             video_s3_path=video_s3_path,
             video_transcript_s3_path=video_transcript_s3_path,
@@ -306,6 +314,7 @@ class VideoPreprocessorBedrockVQA(ABC):
         )
 
         self.bedrock_client = boto3.client("bedrock-runtime")
+        self.vqa_model_name = vqa_model_name
         self.llm_parameters = {
             "anthropic_version": "bedrock-2023-05-31",    
             "max_tokens": 1000,
@@ -323,10 +332,9 @@ class VideoPreprocessorBedrockVQA(ABC):
                         "}\n" \
                         "For \"scene\", describe what you see in the picture in detail.\n" \
                         "For \"text\", list the text you see in that picture.\n" \
-                        "For \"objects\", list the objects you see in the picture.\n" \
-                        "For \"has_face\": \"1\" for True or \"2\" for False on whether you see face in the picture."
+                        "For \"has_face\": \"1\" for True or \"0\" for False on whether you see face in the picture."
         
-        self.llm_parameters["system"] = system_prompt,    
+        self.llm_parameters["system"] = system_prompt
         self.llm_parameters["messages"] = [
             {
                 "role": "user",
@@ -335,13 +343,13 @@ class VideoPreprocessorBedrockVQA(ABC):
                     { "type": "text", "text": task_prompt }
                 ]
             }
-        ],
-
+        ]
+        
         encoded_input = json.dumps(self.llm_parameters).encode("utf-8")
         call_done = False
         while(not call_done):
             try:
-                bedrock_response = self.bedrock_client.invoke_model(body=encoded_input, modelId=vqa_model_id)
+                bedrock_response = self.bedrock_client.invoke_model(body=encoded_input, modelId=self.vqa_model_name)
                 call_done = True
             except bedrock.exceptions.ThrottlingException as e:
                 print("Amazon Bedrock throttling exception")
@@ -433,7 +441,7 @@ class VideoAnalyzer(ABC):
         pass
   
     def preprocess_visual_scenes(self):
-        self.visual_scenes =  sorted(self.original_scenes.items())
+        self.visual_scenes =  sorted(self.original_visual_scenes.items())
       
     def preprocess_visual_texts(self):
         visual_texts_across_timestamps = dict(sorted(self.original_visual_texts.items()))
@@ -483,7 +491,7 @@ class VideoAnalyzer(ABC):
                     sentence += f" { item['alternatives'][0]['content'] }"
 
                 self.transcript = sorted(transcript.items())
-            else item['type'] == 'punctuation':
+            else:
                 # Add punctuation to sentence without heading space
                 sentence += f"{ item['alternatives'][0]['content'] }"
                 # Add sentence to transcription
@@ -990,13 +998,13 @@ def handler():
 
     try:
         # Initiate class for video preprocessing
-        video_preprocessor = VideoPreprocessor( 
-            labels_job_id=labels_job_id, 
-            texts_job_id=texts_job_id, 
+        video_preprocessor = VideoPreprocessorBedrockVQA( 
             transcription_job_name=transcription_job_name,
             bucket_name=bucket_name,
             video_s3_path=video_s3_path,
-            video_transcript_s3_path=video_transcript_s3_path
+            video_transcript_s3_path=video_transcript_s3_path,
+            frame_interval=frame_interval,
+            vqa_model_name=vqa_model_id
         )
         # Wait for extraction jobs to finish
         video_preprocessor.wait_for_dependencies()
