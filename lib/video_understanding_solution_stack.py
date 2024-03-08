@@ -364,121 +364,6 @@ class VideoUnderstandingSolutionStack(Stack):
             result_path="$.preprocessingResult",
         )
 
-        # Step function task to start the Rekognition label detection task to detect visual scenes
-"""
-        start_rekognition_label_detection_sfn_task = _sfn_tasks.CallAwsService(
-            self,
-            "StartRekognitionLabelDetectionSfnTask",
-            service="rekognition",
-            action="startLabelDetection",
-            parameters={
-                "Video": {
-                    "S3Object": {
-                        "Bucket": video_bucket_s3.bucket_name,
-                        "Name.$": "$.videoS3Path",
-                    }
-                },
-                "MinConfidence": visual_scene_detection_confidence_threshold,
-            },
-            result_path="$.startLabelDetectionResult",
-            iam_resources=["*"],
-            additional_iam_statements=[
-                _iam.PolicyStatement(
-                    actions=["s3:GetObject", "s3:ListBucket"], 
-                    resources=[
-                        f"arn:aws:s3:::{video_bucket_s3.bucket_name}", 
-                        f"arn:aws:s3:::{video_bucket_s3.bucket_name}/{raw_folder}/*"
-                    ]
-                )
-            ],
-        )
-
-        # Step function task to check the status of the Rekognition label detection task to detect visual scenes
-        get_rekognition_label_detection_sfn_task = _sfn_tasks.CallAwsService(
-            self,
-            "GetRekognitionLabelDetectionSfnTask",
-            service="rekognition",
-            action="getLabelDetection",
-            parameters={
-                "JobId.$": "$.startLabelDetectionResult.JobId",
-                "MaxResults": 1
-            },
-            result_path="$.labelDetectionResult",
-            result_selector={
-                "JobId.$": "$.JobId",
-                "JobStatus.$": "$.JobStatus"
-            },
-            iam_resources=["*"],
-        )
-
-        label_detection_success = _sfn.Succeed(self, "Label detection is successful")
-        label_detection_failure = _sfn.Fail(self, "Label detection is failed")
-        label_detection_choice = _sfn.Choice(self, "Label detection choice")
-        label_detection_success_condition = _sfn.Condition.string_equals("$.labelDetectionResult.JobStatus", "SUCCEEDED")
-        label_detection_failure_condition = _sfn.Condition.string_equals("$.labelDetectionResult.JobStatus", "FAILED")
-        label_detection_wait = _sfn.Wait(self, "Label detection wait",time=_sfn.WaitTime.duration(Duration.seconds(30))).next(get_rekognition_label_detection_sfn_task)
-
-        # Build the flow
-        start_rekognition_label_detection_sfn_task.next(get_rekognition_label_detection_sfn_task).next(label_detection_choice)
-        label_detection_choice.when(label_detection_success_condition, label_detection_success).when(label_detection_failure_condition,label_detection_failure).otherwise(label_detection_wait)
-
-        # Step function task to start the Rekognition text detection task to detect visual texts
-        start_rekognition_text_detection_sfn_task = _sfn_tasks.CallAwsService(
-            self,
-            "StartRekognitionTextDetectionSfnTask",
-            service="rekognition",
-            action="startTextDetection",
-            parameters={
-                "Video": {
-                    "S3Object": {
-                        "Bucket": video_bucket_s3.bucket_name,
-                        "Name.$": "$.videoS3Path",
-                    }
-                },
-                "Filters": {"WordFilter": {"MinConfidence": visual_text_detection_confidence_threshold}},
-            },
-            result_path="$.startTextDetectionResult",
-            iam_resources=["*"],
-            additional_iam_statements=[
-                _iam.PolicyStatement(
-                    actions=["s3:GetObject", "s3:ListBucket"], 
-                    resources=[
-                        f"arn:aws:s3:::{video_bucket_s3.bucket_name}", 
-                        f"arn:aws:s3:::{video_bucket_s3.bucket_name}/{raw_folder}/*"
-                    ]
-                )
-            ],
-        )
-
-        # Step function task to check the status of the Rekognition text detection task to detect visual texts
-        get_rekognition_text_detection_sfn_task = _sfn_tasks.CallAwsService(
-            self,
-            "GetRekognitionTextDetectionSfnTask",
-            service="rekognition",
-            action="getTextDetection",
-            parameters={
-                "JobId.$": "$.startTextDetectionResult.JobId",
-                "MaxResults": 1
-            },
-            result_path="$.textDetectionResult",
-            result_selector={
-                "JobId.$": "$.JobId",
-                "JobStatus.$": "$.JobStatus"
-            },
-            iam_resources=["*"],
-        )
-
-        text_detection_success = _sfn.Succeed(self, "Text detection is successful")
-        text_detection_failure = _sfn.Fail(self, "Text detection is failed")
-        text_detection_choice = _sfn.Choice(self, "Text detection choice")
-        text_detection_success_condition = _sfn.Condition.string_equals("$.textDetectionResult.JobStatus", "SUCCEEDED")
-        text_detection_failure_condition = _sfn.Condition.string_equals("$.textDetectionResult.JobStatus", "FAILED")
-        text_detection_wait = _sfn.Wait(self, "Text detection wait",time=_sfn.WaitTime.duration(Duration.seconds(30))).next(get_rekognition_text_detection_sfn_task)
-
-        # Build the flow
-        start_rekognition_text_detection_sfn_task.next(get_rekognition_text_detection_sfn_task).next(text_detection_choice)
-        text_detection_choice.when(text_detection_success_condition, text_detection_success).when(text_detection_failure_condition, text_detection_failure).otherwise(text_detection_wait)
-"""
         # Step function task to start the Transcribe transcription task to extract human voice and transcribe it
         start_transcription_job_sfn_task = _sfn_tasks.CallAwsService(
             self,
@@ -684,9 +569,7 @@ class VideoUnderstandingSolutionStack(Stack):
                 container_definition=analyzer_container_definition,
                 environment=[
                     _sfn_tasks.TaskEnvironmentVariable(name="VIDEO_S3_PATH", value=_sfn.JsonPath.string_at("$[0].videoS3Path")),
-                    _sfn_tasks.TaskEnvironmentVariable(name="LABEL_DETECTION_JOB_ID", value=_sfn.JsonPath.string_at("$[0].labelDetectionResult.JobId")),
-                    _sfn_tasks.TaskEnvironmentVariable(name="TEXT_DETECTION_JOB_ID", value=_sfn.JsonPath.string_at("$[1].textDetectionResult.JobId")),
-                    _sfn_tasks.TaskEnvironmentVariable(name="TRANSCRIPTION_JOB_NAME", value=_sfn.JsonPath.string_at("$[2].transcriptionResult.TranscriptionJobName")),
+                    _sfn_tasks.TaskEnvironmentVariable(name="TRANSCRIPTION_JOB_NAME", value=_sfn.JsonPath.string_at("$[0].transcriptionResult.TranscriptionJobName")),
                     _sfn_tasks.TaskEnvironmentVariable(name='DATABASE_NAME', value= database_name),
                     _sfn_tasks.TaskEnvironmentVariable(name='VIDEO_TABLE_NAME', value= video_table_name),
                     _sfn_tasks.TaskEnvironmentVariable(name='ENTITIES_TABLE_NAME', value= entities_table_name),
@@ -702,7 +585,7 @@ class VideoUnderstandingSolutionStack(Stack):
                     _sfn_tasks.TaskEnvironmentVariable(name="VIDEO_SCRIPT_FOLDER", value= video_script_folder),
                     _sfn_tasks.TaskEnvironmentVariable(name="TRANSCRIPTION_FOLDER", value= transcription_folder),
                     _sfn_tasks.TaskEnvironmentVariable(name="ENTITY_SENTIMENT_FOLDER", value= entity_sentiment_folder),
-                    _sfn_tasks.TaskEnvironmentVariable(name="SUMMARY_FOLDER", value= summary_folder)
+                    _sfn_tasks.TaskEnvironmentVariable(name="SUMMARY_FOLDER", value= summary_folder),
                     _sfn_tasks.TaskEnvironmentVariable(name='FRAME_INTERVAL', value= frame_interval),
                 ]
             )],

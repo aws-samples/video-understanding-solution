@@ -10,13 +10,7 @@ import cv2
 import base64
 from PIL import Image
 
-config = Config(read_timeout=1000) # Extends botocore read timeout to 1000 seconds
-
-rekognition = boto3.client('rekognition')
-transcribe = boto3.client("transcribe")
 secrets_manager = boto3.client('secretsmanager')
-bedrock = boto3.client(service_name="bedrock-runtime", config=config)
-s3 = boto3.client("s3")
 
 model_id = os.environ["MODEL_ID"]
 vqa_model_id = os.environ["VQA_MODEL_ID"]
@@ -37,9 +31,7 @@ content_table_name = os.environ['CONTENT_TABLE_NAME']
 secret_name = os.environ['SECRET_NAME']
 writer_endpoint = os.environ['DB_WRITER_ENDPOINT']
 
-video_s3_path = os.environ['VIDEO_S3_PATH']
-labels_job_id = os.environ['LABEL_DETECTION_JOB_ID']
-texts_job_id = os.environ['TEXT_DETECTION_JOB_ID']
+video_s3_path = os.environ['VIDEO_S3_PATH'] 
 transcription_job_name = os.environ['TRANSCRIPTION_JOB_NAME']
 
 credentials = json.loads(secrets_manager.get_secret_value(SecretId=secret_name)["SecretString"])
@@ -313,7 +305,9 @@ class VideoPreprocessorBedrockVQA(VideoPreprocessor):
             frame_interval=frame_interval
         )
 
-        self.bedrock_client = boto3.client("bedrock-runtime")
+        config = Config(read_timeout=1000) # Extends botocore read timeout to 1000 seconds
+        self.bedrock_client = boto3.client(service_name="bedrock-runtime", config=config)
+        
         self.vqa_model_name = vqa_model_name
         self.llm_parameters = {
             "anthropic_version": "bedrock-2023-05-31",    
@@ -934,7 +928,10 @@ class VideoAnalyzerBedrock(VideoAnalyzer):
         video_script_folder: str
         ):
         super().__init__(bucket_name, video_name, video_path, visual_scenes, visual_texts, transcript, celebrities, faces,summary_folder, entity_sentiment_folder, video_script_folder)
-        self.bedrock_client = boto3.client("bedrock-runtime")
+        
+        config = Config(read_timeout=1000) # Extends botocore read timeout to 1000 seconds
+        self.bedrock_client = boto3.client(service_name="bedrock-runtime", config=config)
+
         self.model_name = model_name
         self.embedding_model_name = embedding_model_name
         self.llm_parameters = {
