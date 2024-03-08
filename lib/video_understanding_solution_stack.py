@@ -30,6 +30,8 @@ from cdk_nag import AwsSolutionsChecks, NagSuppressions
 
 
 model_id = "anthropic.claude-v2:1"
+vqa_model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
+frame_interval = "500" # millisecond
 chat_model_id = "anthropic.claude-instant-v1"
 embedding_model_id = "cohere.embed-multilingual-v3"
 visual_scene_detection_confidence_threshold = 80.0
@@ -363,6 +365,7 @@ class VideoUnderstandingSolutionStack(Stack):
         )
 
         # Step function task to start the Rekognition label detection task to detect visual scenes
+"""
         start_rekognition_label_detection_sfn_task = _sfn_tasks.CallAwsService(
             self,
             "StartRekognitionLabelDetectionSfnTask",
@@ -475,7 +478,7 @@ class VideoUnderstandingSolutionStack(Stack):
         # Build the flow
         start_rekognition_text_detection_sfn_task.next(get_rekognition_text_detection_sfn_task).next(text_detection_choice)
         text_detection_choice.when(text_detection_success_condition, text_detection_success).when(text_detection_failure_condition, text_detection_failure).otherwise(text_detection_wait)
-
+"""
         # Step function task to start the Transcribe transcription task to extract human voice and transcribe it
         start_transcription_job_sfn_task = _sfn_tasks.CallAwsService(
             self,
@@ -543,8 +546,8 @@ class VideoUnderstandingSolutionStack(Stack):
         # Define the parallel tasks for Rekognition and Transcribe.
         parallel_sfn = _sfn.Parallel(self, "StartVideoAnalysisParallelSfn")
         parallel_sfn = parallel_sfn.branch(
-            start_rekognition_label_detection_sfn_task,
-            start_rekognition_text_detection_sfn_task,
+            #start_rekognition_label_detection_sfn_task,
+            #start_rekognition_text_detection_sfn_task,
             start_transcription_job_sfn_task,
         )
 
@@ -693,12 +696,14 @@ class VideoUnderstandingSolutionStack(Stack):
                     _sfn_tasks.TaskEnvironmentVariable(name='DB_WRITER_ENDPOINT', value= self.db_writer_endpoint.hostname),
                     _sfn_tasks.TaskEnvironmentVariable(name="EMBEDDING_MODEL_ID", value= embedding_model_id),
                     _sfn_tasks.TaskEnvironmentVariable(name="MODEL_ID", value= model_id),
+                    _sfn_tasks.TaskEnvironmentVariable(name='VQA_MODEL_ID', value= vqa_model_id),
                     _sfn_tasks.TaskEnvironmentVariable(name="BUCKET_NAME", value= video_bucket_s3.bucket_name),
                     _sfn_tasks.TaskEnvironmentVariable(name="RAW_FOLDER", value= raw_folder),
                     _sfn_tasks.TaskEnvironmentVariable(name="VIDEO_SCRIPT_FOLDER", value= video_script_folder),
                     _sfn_tasks.TaskEnvironmentVariable(name="TRANSCRIPTION_FOLDER", value= transcription_folder),
                     _sfn_tasks.TaskEnvironmentVariable(name="ENTITY_SENTIMENT_FOLDER", value= entity_sentiment_folder),
                     _sfn_tasks.TaskEnvironmentVariable(name="SUMMARY_FOLDER", value= summary_folder)
+                    _sfn_tasks.TaskEnvironmentVariable(name='FRAME_INTERVAL', value= frame_interval),
                 ]
             )],
         )

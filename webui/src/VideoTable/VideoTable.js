@@ -251,7 +251,7 @@ export class VideoTable extends Component {
     var [videoScriptPrompt, chatPrompt, closingPrompt] = ["","",""]
 
     videoScriptPrompt += "Below is the video timeline with information about the voice heard in the video, visual scenes seen, visual text visible, and any face or celebrity detected. "
-    videoScriptPrompt += "The numbers on the left represents the seconds into the video where the information was extracted.\n"
+    videoScriptPrompt += "The numbers on the left represents the milliseconds into the video where the information was extracted.\n"
     videoScriptPrompt += `<VideoTimeline>\n${video.videoScript}</VideoTimeline>\n\n`
 
     // If the chat history is not too long, then include the whole history in the prompt
@@ -311,7 +311,7 @@ export class VideoTable extends Component {
 
       // Construct the prompt containing the video script (the text representation of the current part of the video)
       videoScriptPrompt += "The video timeline has information about the voice heard in the video, visual scenes seen, visual texts visible, and any face or celebrity detected. "
-      videoScriptPrompt += "The numbers on the left represents the seconds into the video where the information was extracted.\n"
+      videoScriptPrompt += "The numbers on the left represents the milliseconds into the video where the information was extracted.\n"
       videoScriptPrompt += `Because the video is long, the video timeline is split into ${numberOfFragments} parts. `
       if (currentFragment == numberOfFragments){
         videoScriptPrompt += "Below is the last part of the video timeline.\n"
@@ -397,7 +397,7 @@ export class VideoTable extends Component {
     this.addChatWaitingSpinner(video)
 
     var systemPrompt = "\n\nHuman: You are an expert in analyzing video and you can answer questions about the video given the video timeline.\n"
-    systemPrompt += "Answer in the same language as the question from user.\n"
+    systemPrompt += "Answer in the same language as the question from user. Do not use millisecond in answer, and instead use second.\n"
     systemPrompt += "If you do not know, say do not know. DO NOT make up wrong answers.\n" 
     systemPrompt += "The Human who asks can watch the video and they are not aware of the 'video timeline' which will be copied below. So, when answering, DO NOT indicate the presence of 'video timeline'. DO NOT quote raw information as is from the 'video timeline'\n"
     systemPrompt += "When answering, answer SUCCINCTLY and DO NOT provide extra information unless asked.\n"
