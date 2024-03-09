@@ -307,7 +307,7 @@ class VideoPreprocessorBedrockVQA(VideoPreprocessor):
 
         config = Config(read_timeout=1000) # Extends botocore read timeout to 1000 seconds
         self.bedrock_client = boto3.client(service_name="bedrock-runtime", config=config)
-        
+
         self.vqa_model_name = vqa_model_name
         self.llm_parameters = {
             "anthropic_version": "bedrock-2023-05-31",    
@@ -324,8 +324,8 @@ class VideoPreprocessorBedrockVQA(VideoPreprocessor):
                         "\"text\" : [\"String\", \"String\" , . . .],\n" \
                         "\"has_face\": \"Integer\"\n" \
                         "}\n" \
-                        "For \"scene\", describe what you see in the picture in detail.\n" \
-                        "For \"text\", list the text you see in that picture.\n" \
+                        "For \"scene\", describe what you see in the picture in detail, yet succinct.\n" \
+                        "For \"text\", list the text you see in that picture confidently.\n" \
                         "For \"has_face\": \"1\" for True or \"0\" for False on whether you see face in the picture."
         
         self.llm_parameters["system"] = system_prompt
@@ -473,8 +473,9 @@ class VideoAnalyzer(ABC):
                 if sentence_start_time  == -1:
                     # If there is a speaker label, then start the sentence by identifying the speaker id.
                     if "speaker_label" in item:
-                        label = item['speaker_label'].replace('spk','speaker')
-                        sentence += f" <{label}>"
+                        match = re.search(r"spk_(\d+)", item['speaker_label'])
+                        speaker_number = int(match.group(1)) + 1 # So that it starts from 1, not 0
+                        sentence += f" Speaker {speaker_number}:"
                     # Add word to sentence with heading space
                     sentence += f" { item['alternatives'][0]['content'] }"
                     # Set the start time of the sentence to be the start time of this first word in the sentence
@@ -502,31 +503,31 @@ class VideoAnalyzer(ABC):
       
     def generate_combined_video_script(self):
         def transform_scenes(x):
-            timestamp = x[0]
-            objects = ",".join(x[1])
-            return (timestamp, f"Scene:{objects}")
+            timestamp = round(x[0]/1000, 1) # Convert millis to second
+            scene = x[1]
+            return (timestamp, f"Scene:{scene}")
         scenes  = list(map(transform_scenes, self.visual_scenes))
 
         def transform_texts(x):
-            timestamp = x[0]
+            timestamp = round(x[0]/1000, 1) # Convert millis to second
             texts = ",".join(x[1])
             return (timestamp, f"Text:{texts}")
         visual_texts  = list(map(transform_texts, self.visual_texts))
 
         def transform_transcript(x):
-            timestamp = x[0]
+            timestamp = round(x[0]/1000, 1) # Convert millis to second
             transcript = x[1]
             return (timestamp, f"Voice:{transcript}")
         transcript  = list(map(transform_transcript, self.transcript))
 
         def transform_celebrities(x):
-            timestamp = x[0]
+            timestamp = round(x[0]/1000, 1) # Convert millis to second
             celebrities = ",".join([celeb_finding.display() for celeb_finding in x[1]])
             return (timestamp, f"Celebrity:{celebrities}")
         visual_celebrities = list(map(transform_celebrities, self.celebrities))
 
         def transform_faces(x):
-            timestamp = x[0]
+            timestamp = round(x[0]/1000, 1) # Convert millis to second
             faces = ",".join([face_finding.display() for face_finding in x[1]])
             return (timestamp, f"Face:{faces}")
         visual_faces = list(map(transform_faces, self.faces))
@@ -543,18 +544,18 @@ class VideoAnalyzer(ABC):
         prompt_prefix = "You are an expert video analyst who reads a Video Timeline and creates summary of the video.\n" \
                         "The Video Timeline is a text representation of a video.\n" \
                         "The Video Timeline contains the visual scenes, the visual texts, and human voice in the video.\n" \
-                        "Visual scenes (scene) represents what objects are visible in the video at that millisecond. This can be the objects seen in camera, or objects from a screen sharing, or any other visual scenarios. You can infer how the visualization look like, so long as you are confident.\n" \
+                        "Visual scenes (scene) represents what objects are visible in the video at that second. This can be the objects seen in camera, or objects from a screen sharing, or any other visual scenarios. You can infer how the visualization look like, so long as you are confident.\n" \
                         "Visual texts (text) are the text visible in the video. It can be texts in real world objects as recorded in video camera, or those from screen sharing, or those from presentation recording, or those from news, movies, or others. \n" \
                         "Human voice (voice) is the transcription of the video.\n" \
-                        "Celebrities (celebrity) provides information about the celebrity detected in the video at that millisecond. It may have the information on whether the celebrity is smiling and the captured emotions. It may also has information on where the face is located relative to the video frame size. The celebrity may not be speaking as he/she may just be portrayed. \n" \
-                        "Human faces (face) lists the face seen in the video at that millisecond. This may have information on the emotions, face location relative to the video frame, and more facial features. \n"
+                        "Celebrities (celebrity) provides information about the celebrity detected in the video at that second. It may have the information on whether the celebrity is smiling and the captured emotions. It may also has information on where the face is located relative to the video frame size. The celebrity may not be speaking as he/she may just be portrayed. \n" \
+                        "Human faces (face) lists the face seen in the video at that second. This may have information on the emotions, face location relative to the video frame, and more facial features. \n"
 
         video_script_length = len(self.combined_video_script)
 
         # When the video is short enough to fit into 1 chunk
         if video_script_length <= self.video_script_chunk_size_for_summary_generation:
             core_prompt = f"The VIDEO TIMELINE has format below.\n" \
-                            "timestamp in milliseconds:scene / text / voice\n" \
+                            "timestamp in seconds:scene / text / voice\n" \
                             "<Video Timeline>\n" \
                             f"{self.combined_video_script}\n" \
                             "</Video Timeline>\n"
@@ -651,11 +652,11 @@ class VideoAnalyzer(ABC):
         prompt_prefix = "You are an expert video analyst who reads a Video Timeline and extract entities and their associated sentiment.\n" \
                         "The Video Timeline is a text representation of a video.\n" \
                         "The Video Timeline contains the visual scenes, the visual texts, and human voice in the video.\n" \
-                        "Visual scenes (scene) represents what objects are visible in the video at that millisecond. This can be the objects seen in camera, or objects from a screen sharing, or any other visual scenarios. You can infer how the visualization look like, so long as you are confident.\n" \
+                        "Visual scenes (scene) represents what objects are visible in the video at that second. This can be the objects seen in camera, or objects from a screen sharing, or any other visual scenarios. You can infer how the visualization look like, so long as you are confident.\n" \
                         "Visual texts (text) are the text visible in the video. It can be texts in real world objects as recorded in video camera, or those from screen sharing, or those from presentation recording, or those from news, movies, or others. \n" \
                         "Human voice (voice) is the transcription of the video.\n" \
-                        "Celebrities (celebrity) provides information about the celebrity detected in the video at that millisecond. It may have the information on whether the celebrity is smiling and the captured emotions. It may also has information on where the face is located relative to the video frame size. The celebrity may not be speaking as he/she may just be portrayed. \n" \
-                        "Human faces (face) lists the face seen in the video at that millisecond. This may have information on the emotions, face location relative to the video frame, and more facial features. \n"
+                        "Celebrities (celebrity) provides information about the celebrity detected in the video at that second. It may have the information on whether the celebrity is smiling and the captured emotions. It may also has information on where the face is located relative to the video frame size. The celebrity may not be speaking as he/she may just be portrayed. \n" \
+                        "Human faces (face) lists the face seen in the video at that second. This may have information on the emotions, face location relative to the video frame, and more facial features. \n"
                         
         
         video_script_length = len(self.combined_video_script)
