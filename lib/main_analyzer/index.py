@@ -74,12 +74,12 @@ class CelebrityFinding():
         )
 
     def display(self) -> str:
-        display_string = self.name
+        display_string = f"Name is {self.name}. "
         if len(self.emotions) > 0:
-            display_string += "|" + "-".join(self.emotions)
+            display_string += "Emotions appear to be " + ", ".join(self.emotions) + ". "
         if self.smile_confidence >= self.celebrity_feature_confidence_threshold: 
-            display_string += "|smiling" if self.smile else "|not smiling"
-        display_string += f"|face is located {self.left_display} from left - {self.top_display} from top - with height {self.height_display} and width {self.width_display} of the video frame"
+            display_string += "The celebrity is smiling. " if self.smile else "The celebrity is not smiling at this moment. "
+        display_string += f"The celeb's face is located at {self.left_display} of frame's width from left and {self.top_display} of frame's height from top, with face height of {self.height_display} of frame's height and face width of {self.width_display} of the frame's width. "
 
         return display_string
 
@@ -127,26 +127,26 @@ class FaceFinding():
         return found
 
     def display(self) -> str:
-        display_string = f"{self.age_low}-{self.age_high} years old"
+        display_string = f"The person is about {self.age_low} to {self.age_high} years old. "
         if self.gender_confidence >= self.face_feature_confidence_threshold:
-            display_string += f"|{self.gender}"
+            display_string += f"Identifed gender is {self.gender}. "
         if len(self.emotions) > 0:
-            display_string += "|" + "-".join(self.emotions)
+            display_string += "Emotion appers to be " + ", ".join(self.emotions.lower()) + ". "
         if self.smile_confidence >= self.face_feature_confidence_threshold:
-            display_string += "|smiling" if self.smile else "|not smiling"
+            display_string += "Seems to be smiling. " if self.smile else "Seems to be not smiling. "
         if self.beard_confidence >= self.face_feature_confidence_threshold:
-            display_string += "|has beard" if self.beard else "|no beard"
+            display_string += "Person has beard. " if self.beard else "Person has no beard. "
         if self.mustache_confidence >= self.face_feature_confidence_threshold:
-            display_string += "|has mustache" if self.mustache else "|no mustache"
+            display_string += "Person has mustache. " if self.mustache else "Person has no mustache. "
         if self.sunglasses_confidence >= self.face_feature_confidence_threshold:
-            display_string += "|wears sunglasses" if self.sunglasses else "|no sunglasses"
+            display_string += "Person wears sunglasses. " if self.sunglasses else "No sunglasses is identified. "
         if self.eyeglasses_confidence >= self.face_feature_confidence_threshold:
-            display_string += "|wears eyeglasses" if self.eyeglasses else "|no eyeglasses"
+            display_string += "Person wears eyeglasses. " if self.eyeglasses else "Person does not wear eyeglasses. "
         if self.mouthopen_confidence >= self.face_feature_confidence_threshold:
-            display_string += "|mouth is open" if self.mouthopen else "|mouth is closed"
+            display_string += "At this moment, person's mouth is open, might be speaking. " if self.mouthopen else "At this moment, person's mouth is not opened. "
         if self.eyesopen_confidence >= self.face_feature_confidence_threshold:
-            display_string += "|eyes are open" if self.eyesopen else "|eyes is closed"
-        display_string += f"|face is located {self.left_display} from left - {self.top_display} from top - with height {self.height_display} and width {self.width_display} of the video frame"
+            display_string += "Person's eyes are open. " if self.eyesopen else "At this moment, person's eyes are closed. "
+        display_string += f"Person's face is located {self.left_display} of frame's width from left and {self.top_display} of frame's height from top, with face height of {self.height_display} of frame's height and face width {self.width_display} of frame's width. "
         
         return display_string
 
@@ -511,7 +511,7 @@ class VideoAnalyzer(ABC):
         def transform_texts(x):
             timestamp = round(x[0]/1000, 1) # Convert millis to second
             texts = ",".join(x[1])
-            return (timestamp, f"Text:{texts}")
+            return (timestamp, f"Texts:{texts}")
         visual_texts  = list(map(transform_texts, self.visual_texts))
 
         def transform_transcript(x):
@@ -522,14 +522,14 @@ class VideoAnalyzer(ABC):
 
         def transform_celebrities(x):
             timestamp = round(x[0]/1000, 1) # Convert millis to second
-            celebrities = ",".join([celeb_finding.display() for celeb_finding in x[1]])
-            return (timestamp, f"Celebrity:{celebrities}")
+            celebrities = ",".join([f"Celeb {(idx+1)}:{celeb_finding.display()}" for idx, celeb_finding in enumerate(x[1])])
+            return (timestamp, f"Celebrities:{celebrities}")
         visual_celebrities = list(map(transform_celebrities, self.celebrities))
 
         def transform_faces(x):
             timestamp = round(x[0]/1000, 1) # Convert millis to second
-            faces = ",".join([face_finding.display() for face_finding in x[1]])
-            return (timestamp, f"Face:{faces}")
+            faces = ",".join([f"Face {(idx+1)}:{face_finding.display()}" for idx, face_finding in enumerate(x[1])])
+            return (timestamp, f"Faces:{faces}")
         visual_faces = list(map(transform_faces, self.faces))
  
         # Combine all inputs
