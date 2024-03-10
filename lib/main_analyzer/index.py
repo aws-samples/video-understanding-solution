@@ -131,7 +131,7 @@ class FaceFinding():
         if self.gender_confidence >= self.face_feature_confidence_threshold:
             display_string += f"Identifed gender is {self.gender}. "
         if len(self.emotions) > 0:
-            display_string += "Emotion appers to be " + ", ".join(self.emotions.lower()) + ". "
+            display_string += "Emotion appers to be " + ", ".join(self.emotions) + ". "
         if self.smile_confidence >= self.face_feature_confidence_threshold:
             display_string += "Seems to be smiling. " if self.smile else "Seems to be not smiling. "
         if self.beard_confidence >= self.face_feature_confidence_threshold:
