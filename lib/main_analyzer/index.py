@@ -131,7 +131,7 @@ class FaceFinding():
         if self.gender_confidence >= self.face_feature_confidence_threshold:
             display_string += f"Identifed gender is {self.gender}. "
         if len(self.emotions) > 0:
-            display_string += "Emotion appers to be " + ", ".join(self.emotions) + ". "
+            display_string += "Emotion appears to be " + ", ".join(self.emotions) + ". "
         if self.smile_confidence >= self.face_feature_confidence_threshold:
             display_string += "Seems to be smiling. " if self.smile else "Seems to be not smiling. "
         if self.beard_confidence >= self.face_feature_confidence_threshold:
@@ -206,6 +206,7 @@ class VideoPreprocessor(ABC):
         self.video_duration_seconds = float(frame_count/fps)
         self.video_duration_millis = int(self.video_duration_seconds*1000)
         
+        previous_scene: str = "empty"
         timestamp_millis: int
         for timestamp_millis in range(0, self.video_duration_millis, self.frame_interval):
             video.set(cv2.CAP_PROP_POS_MSEC, int(timestamp_millis))
@@ -225,7 +226,17 @@ class VideoPreprocessor(ABC):
             image_pil.save(io_stream, format='JPEG')
             image = io_stream.getvalue()
 
-            vqa_response = self.call_vqa(base64.b64encode(image).decode("utf-8")) 
+            system_prompt = "You are an expert in extracting information from video frames. Each video frame is an image. You will extract the scene, text, and more information."
+            task_prompt =   "Extract information from this image and output a JSON with this format:\n" \
+                        "{\n" \
+                        "\"scene\" : \"String\",\n" \
+                        "\"text\" : [\"String\", \"String\" , . . .],\n" \
+                        "\"has_face\": \"Integer\"\n" \
+                        "}\n" \
+                        "For \"scene\", describe what you see in the image in detail, yet succinct. If the scene is very similar to the scene of previous frame, then just say \"Similar to previous.\" The previous scene is {previous_scene}. \n" \
+                        "For \"text\", list the text you see in that image confidently.\n" \
+                        "For \"has_face\": \"1\" for True or \"0\" for False on whether you see face in the picture."
+            vqa_response = self.call_vqa(image_data=base64.b64encode(image).decode("utf-8"), system_prompt = system_prompt, task_prompt=task_prompt) 
 
             # Sometimes the response might be censored due to false positive of inappropriate content. When that happens, just skip this frame.
             try:
@@ -235,6 +246,7 @@ class VideoPreprocessor(ABC):
 
             self.visual_scenes[timestamp_millis] = parsed_vqa_results["scene"]
             self.visual_texts[timestamp_millis] = parsed_vqa_results["text"]
+            previous_scene = parsed_vqa_results["scene"]
 
             if int(parsed_vqa_results["has_face"]) == 1:
 
@@ -316,18 +328,7 @@ class VideoPreprocessorBedrockVQA(VideoPreprocessor):
             "top_k": 3,
         }
     
-    def call_vqa(self, image_data) -> str:
-        system_prompt = "You are an expert in extracting information from video frames. Each video frame is an image. You will extract the scene, text, and more information."
-        task_prompt =   "Extract information from this image and output a JSON with this format:\n" \
-                        "{\n" \
-                        "\"scene\" : \"String\",\n" \
-                        "\"text\" : [\"String\", \"String\" , . . .],\n" \
-                        "\"has_face\": \"Integer\"\n" \
-                        "}\n" \
-                        "For \"scene\", describe what you see in the picture in detail, yet succinct.\n" \
-                        "For \"text\", list the text you see in that picture confidently.\n" \
-                        "For \"has_face\": \"1\" for True or \"0\" for False on whether you see face in the picture."
-        
+    def call_vqa(self, image_data: bytes, system_prompt: str, task_prompt: str) -> str:
         self.llm_parameters["system"] = system_prompt
         self.llm_parameters["messages"] = [
             {
@@ -462,39 +463,63 @@ class VideoAnalyzer(ABC):
 
     def preprocess_transcript(self):
         transcript= {}
-        word_start_time = None
-        sentence_start_time = -1
-        sentence = ""
+        #word_start_time = None
+        #sentence_start_time = -1
+        #sentence = ""
+        previous_millis: int = 0
         for item in self.original_transcript["results"]["items"]:
-            # If this is a punctuation, which could be end of sentence
-            if item['type'] != 'punctuation':
-                word_start_time = int(float(item['start_time'])*1000) # In millisecond
-                # If this is start of sentence
-                if sentence_start_time  == -1:
-                    # If there is a speaker label, then start the sentence by identifying the speaker id.
+            if item['type'] == 'punctuation':
+                transcript[previous_millis] = item['alternatives'][0]['content']
+            else:
+                try:
+                    time_millis: int = int(float(item['start_time'])*1000) # In millisecond
+                    content: str = ""
+                    
                     if "speaker_label" in item:
                         match = re.search(r"spk_(\d+)", item['speaker_label'])
                         speaker_number = int(match.group(1)) + 1 # So that it starts from 1, not 0
-                        sentence += f" Speaker {speaker_number}:"
-                    # Add word to sentence with heading space
-                    sentence += f" { item['alternatives'][0]['content'] }"
-                    # Set the start time of the sentence to be the start time of this first word in the sentence
-                    sentence_start_time  = word_start_time
-                # If this is mid of sentence
-                else:
-                    # Add word to sentence with heading space
-                    sentence += f" { item['alternatives'][0]['content'] }"
+                        content += f" Speaker {speaker_number} "
+                    if "language_code" in item:
+                        content += f"in language {item['language_code']}"
 
-                self.transcript = sorted(transcript.items())
-            else:
-                # Add punctuation to sentence without heading space
-                sentence += f"{ item['alternatives'][0]['content'] }"
-                # Add sentence to transcription
-                transcript[word_start_time] = sentence
-                # Reset the sentence and sentence start time
-                sentence = ""
-                sentence_start_time  = -1
-    
+                    content += f": {item['alternatives'][0]['content']}"
+
+                    transcript[time_millis] = content
+                    previous_millis = time_millis
+                except Exception as e:
+                    print(item)
+                    raise e
+            
+                """
+                # If this is a punctuation, which could be end of sentence
+                if item['type'] != 'punctuation':
+                    word_start_time = int(float(item['start_time'])*1000) # In millisecond
+                    # If this is start of sentence
+                    if sentence_start_time  == -1:
+                        # If there is a speaker label, then start the sentence by identifying the speaker id.
+                        if "speaker_label" in item:
+                            match = re.search(r"spk_(\d+)", item['speaker_label'])
+                            speaker_number = int(match.group(1)) + 1 # So that it starts from 1, not 0
+                            sentence += f" Speaker {speaker_number}:"
+                        # Add word to sentence with heading space
+                        sentence += f" { item['alternatives'][0]['content'] }"
+                        # Set the start time of the sentence to be the start time of this first word in the sentence
+                        sentence_start_time  = word_start_time
+                    # If this is mid of sentence
+                    else:
+                        # Add word to sentence with heading space
+                        sentence += f" { item['alternatives'][0]['content'] }"
+
+                    self.transcript = sorted(transcript.items())
+                else:
+                    # Add punctuation to sentence without heading space
+                    sentence += f"{ item['alternatives'][0]['content'] }"
+                    # Add sentence to transcription
+                    transcript[word_start_time] = sentence
+                    # Reset the sentence and sentence start time
+                    sentence = ""
+                    sentence_start_time  = -1
+                """
     def preprocess_celebrities(self):
         self.celebrities = sorted(self.original_celebrities.items())
 
@@ -677,7 +702,7 @@ class VideoAnalyzer(ABC):
             "You will never see the video. This video timeline is the best you get. You can make reasonable extrapolation of the actual video given the Video Timeline.\n" \
             "Entities can be a person, company, country, concept, brand, or anything where audience may be interested in knowing the trend.\n" \
             "You MUST ONLY list important entities of interest, not every entity you found.\n" \
-            "For person or individual, DO NOT give sentiment rating. Put N/A for the sentiment and reason fields.\n" \
+            "For person or celebrity or individual, DO NOT give sentiment rating. Put N/A for the sentiment and reason fields.\n" \
             "Sentiment's reason MUST justify the sentiment. For no meaningful reason, just put N/A for the sentiment's reason.\n" \
             "Each row of your answer MUST be of this format entity|sentiment|sentiment's reason. Follow the below example.\n\n" \
             "Entities:\n" \
@@ -690,7 +715,7 @@ class VideoAnalyzer(ABC):
             "</Task>\n" \
             "Entities:\n"
           
-            self.video_rolling_sentiment = self.call_llm(prompt, temperature=0.8, stop_sequences=["<Task>"])
+            self.video_rolling_sentiment = self.call_llm(prompt, temperature=0.1, stop_sequences=["<Task>"])
         else:
             number_of_chunks = math.ceil( (video_script_length + 1) / (self.video_script_chunk_size_for_entities_extraction - self.video_script_chunk_overlap_for_entities_extraction) )
             
@@ -740,7 +765,7 @@ class VideoAnalyzer(ABC):
                     "</Task>\n" \
                     "Entities:\n"
                     
-                    chunk_sentiment = self.call_llm(prompt, temperature=0.8, stop_sequences=["<Task>"])
+                    chunk_sentiment = self.call_llm(prompt, temperature=0.1, stop_sequences=["<Task>"])
                     self.video_rolling_sentiment = chunk_sentiment
                 elif is_first_chunk:
                     prompt = f"{prompt_prefix}\n\n" \
