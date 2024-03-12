@@ -487,39 +487,11 @@ class VideoAnalyzer(ABC):
                     transcript[time_millis] = content
                     previous_millis = time_millis
                 except Exception as e:
-                    print(item)
+                    print("Error in transcribing")
                     raise e
-            
-                """
-                # If this is a punctuation, which could be end of sentence
-                if item['type'] != 'punctuation':
-                    word_start_time = int(float(item['start_time'])*1000) # In millisecond
-                    # If this is start of sentence
-                    if sentence_start_time  == -1:
-                        # If there is a speaker label, then start the sentence by identifying the speaker id.
-                        if "speaker_label" in item:
-                            match = re.search(r"spk_(\d+)", item['speaker_label'])
-                            speaker_number = int(match.group(1)) + 1 # So that it starts from 1, not 0
-                            sentence += f" Speaker {speaker_number}:"
-                        # Add word to sentence with heading space
-                        sentence += f" { item['alternatives'][0]['content'] }"
-                        # Set the start time of the sentence to be the start time of this first word in the sentence
-                        sentence_start_time  = word_start_time
-                    # If this is mid of sentence
-                    else:
-                        # Add word to sentence with heading space
-                        sentence += f" { item['alternatives'][0]['content'] }"
+                    
+        self.transcript = transcript
 
-                    self.transcript = sorted(transcript.items())
-                else:
-                    # Add punctuation to sentence without heading space
-                    sentence += f"{ item['alternatives'][0]['content'] }"
-                    # Add sentence to transcription
-                    transcript[word_start_time] = sentence
-                    # Reset the sentence and sentence start time
-                    sentence = ""
-                    sentence_start_time  = -1
-                """
     def preprocess_celebrities(self):
         self.celebrities = sorted(self.original_celebrities.items())
 
