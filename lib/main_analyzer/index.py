@@ -9,6 +9,7 @@ from typing import Union, Self
 import cv2
 import base64
 from PIL import Image
+import concurrent.futures
 
 secrets_manager = boto3.client('secretsmanager')
 
@@ -33,6 +34,7 @@ writer_endpoint = os.environ['DB_WRITER_ENDPOINT']
 
 video_s3_path = os.environ['VIDEO_S3_PATH'] 
 transcription_job_name = os.environ['TRANSCRIPTION_JOB_NAME']
+label_detection_job_id = os.environ['LABEL_DETECTION_JOB_ID']
 
 credentials = json.loads(secrets_manager.get_secret_value(SecretId=secret_name)["SecretString"])
 username = credentials["username"]
@@ -152,6 +154,7 @@ class FaceFinding():
 
 class VideoPreprocessor(ABC):
     def __init__(self, 
+        label_detection_job_id: str,
         transcription_job_name: str,
         bucket_name: str,
         video_s3_path: str,
@@ -161,12 +164,15 @@ class VideoPreprocessor(ABC):
         self.s3_client = boto3.client("s3")
         self.transcribe_client = boto3.client("transcribe")
         self.rekognition_client = boto3.client("rekognition")
+        self.label_detection_job_id: str = label_detection_job_id
         self.transcription_job_name: str = transcription_job_name
         self.bucket_name: str = bucket_name
         self.video_s3_path: str = video_s3_path
         self.video_transcript_s3_path: str = video_transcript_s3_path
         self.video_duration_seconds: float  = 0.0
         self.video_duration_millis: int = 0
+        self.visual_objects: dict[int, list[str]] = {}
+        self.person_timestamps_millis: list[int] = []
         self.visual_scenes: dict[int, str] = {}
         self.visual_texts: dict[int, list[str]] = {}
         self.transcript: dict
@@ -175,10 +181,19 @@ class VideoPreprocessor(ABC):
         self.person_timestamps_millis: list[int] = []
         self.frame_interval: int = int(frame_interval) # Millisecond
         self.frame_dim_for_vqa: tuple(int) = (512, 512)
+        self.video_filename = ""
+        self.video: cv2.VideoCapture = None
+        self.frame_bytes: list[list[Union[int, bytes]]] = []
     
     @abstractmethod
     def call_vqa(self, image_data: str) ->str:
         pass
+
+    def wait_for_rekognition_label_detection(self, sort_by):
+        get_object_detection = self.rekognition.get_label_detection(JobId=self.label_detection_job_id, SortBy=sort_by)
+        while(get_object_detection['JobStatus'] == 'IN_PROGRESS'):
+            time.sleep(5)
+            get_object_detection = self.rekognition.get_label_detection(JobId=self.label_detection_job_id, SortBy=sort_by)
 
     def wait_for_transcription_job(self):
         get_transcription = self.transcribe_client.get_transcription_job(TranscriptionJobName=self.transcription_job_name)
@@ -186,27 +201,143 @@ class VideoPreprocessor(ABC):
             time.sleep(5)
             get_transcription = self.transcribe_client.get_transcription_job(TranscriptionJobName=self.transcription_job_name)
     
+    def extract_visual_objects(self, get_object_detection_result: dict):
+        label: dict
+        for label in get_object_detection_result['Labels']:
+            objects_at_this_timestamp: list = []
+            timestamp_millis: int = int(label['Timestamp'])
+            timestamp_second: float = timestamp_millis/1000
+
+            # If this timestamp millis is already in self.visual_objects dictionary, then use it and append. Otherwise, add a new key to the dict.
+            if timestamp_millis in self.visual_objects:
+                objects_at_this_timestamp = self.visual_objects[timestamp_millis]
+            else:
+                self.visual_objects[timestamp_millis] = objects_at_this_timestamp
+
+            object_name: str = label['Label']['Name']
+
+            # If this is a Person object, then register this into the timestamp list for face detection.
+            if object_name == "Person":
+                self.person_timestamps_millis.append(timestamp_millis)
+
+            if (object_name not in objects_at_this_timestamp):
+                # Append the object name to the list of objects for timestamp second
+                objects_at_this_timestamp.append(object_name)
+  
+    def iterate_object_detection_result(self):
+        get_object_detection_result: dict = self.rekognition.get_label_detection(
+            JobId=self.label_detection_job_id,
+            MaxResults=1000,
+            SortBy='TIMESTAMP'
+        )
+
+        if get_object_detection_result["JobStatus"] == "FAILED": return # In case the job failed, just skip this channel.
+
+        self.video_duration_millis = int(get_object_detection_result["VideoMetadata"]["DurationMillis"])
+        self.video_duration_seconds = self.video_duration_millis/1000
+
+        # Extract visual scenes and populate self.visual_objects
+        self.extract_visual_objects(get_object_detection_result)
+
+        # In case results is large, iterate the next pages until no more page left.
+        while("NextToken" in get_object_detection_result):
+            get_object_detection_result: dict = self.rekognition.get_label_detection(
+                JobId=self.label_detection_job_id,
+                MaxResults=1000,
+                NextToken=get_object_detection_result["NextToken"]
+            )
+            self.extract_visual_objects(get_object_detection_result)
+
     def fetch_transcription(self) -> dict:
         video_transcription_file: dict = self.s3_client.get_object(Bucket=self.bucket_name, Key=self.video_transcript_s3_path)
         self.transcript = json.loads(video_transcription_file['Body'].read().decode('utf-8'))
 
-    def download_video(self) -> str:
+    def download_video(self):
         filename: str = os.path.basename(self.video_s3_path)
         self.s3_client.download_file(self.bucket_name, self.video_s3_path, filename)
-        return filename
+        self.video_filename = filename
 
-    def load_video(self, video_filename: str) -> cv2.VideoCapture:
-        return cv2.VideoCapture(video_filename)
-
-    def extract_information_from_vqa(self):
-        video: cv2.VideoCapture = self.load_video( self.download_video() )
-
+    def load_video(self):
+        self.video: cv2.VideoCapture = cv2.VideoCapture(self.video_filename)
         frame_count = video.get(cv2.CAP_PROP_FRAME_COUNT)
         fps = video.get(cv2.CAP_PROP_FPS)
         self.video_duration_seconds = float(frame_count/fps)
         self.video_duration_millis = int(self.video_duration_seconds*1000)
+    
+    def detect_faces_and_celebrities(self):
+        if self.video == None:
+            raise Exception("detect_faces_and_celebrities is called before the video is loaded")
+        if len(self.person_timestamps_millis) == 0:
+            print("Warning: detect_faces_and_celebrities is called before objects detection, which cause 0 'person' result")
         
-        previous_scene: str = "empty"
+        video = self.video
+        timestamp_millis: int
+        for timestamp_millis in self.person_timestamps_millis:
+            video.set(cv2.CAP_PROP_POS_MSEC, int(timestamp_millis))
+            success, frame = video.read()
+            # Resize frame to 512 x 512 px
+            dim = self.frame_dim_for_vqa
+            # This may fail if the frame is empty. Just skip the frame if so.
+            try:
+                frame = cv2.resize(frame, dim, interpolation = cv2.INTER_AREA)
+            except:
+                continue
+            
+            if not success: continue
+
+            image_pil = Image.fromarray(frame)
+            io_stream = io.BytesIO()
+            image_pil.save(io_stream, format='JPEG')
+            image = io_stream.getvalue()
+
+            # Call Rekognition to detect celebrity
+            recognize_celebrity_response: dict = self.rekognition_client.recognize_celebrities(Image={'Bytes': image})
+            celebrity_findings: list[dict] = recognize_celebrity_response["CelebrityFaces"]
+            unrecognized_faces: list[dict] = recognize_celebrity_response["UnrecognizedFaces"]
+            
+            # Parse Rekognition celebrity detection data and add to dictionary as appropriate
+            if len(celebrity_findings) > 0:
+                if timestamp_millis not in self.celebrities: self.celebrities[timestamp_millis] = []
+                celebrity_finding_dict: dict
+                for celebrity_finding_dict in celebrity_findings:
+                    if int(celebrity_finding_dict["MatchConfidence"]) < CelebrityFinding.celebrity_match_confidence_threshold: continue
+                    celebrity_finding = CelebrityFinding(celebrity_finding_dict)
+                    self.celebrities[timestamp_millis].append(celebrity_finding)
+
+            # Only call the detect face APU if there are other faces beside the recognized celebrity in this frame
+            # This also applies when there is 0 celebrity detected, but there are more faces in the frame.
+            if len(unrecognized_faces) == 0: continue
+
+            # Call Rekognition to detect faces
+            face_findings: dict = self.rekognition_client.detect_faces(Image={'Bytes': image}, Attributes=['ALL'])['FaceDetails']
+
+            if len(face_findings) == 0: continue
+
+            if timestamp_millis not in self.faces: self.faces[timestamp_millis] = []
+            face_finding_dict: dict
+            for face_finding_dict in face_findings:
+                if int(face_finding_dict["Confidence"]) < FaceFinding.face_detection_confidence_threshold : continue
+                face_finding = FaceFinding(face_finding_dict)
+
+                # The below code checks if this face is already captured as celebrity by checking the bounding box for the detected celebrities at this frame
+                face_found_in_celebrities_list = False
+                if timestamp_millis in self.celebrities:
+                    for celebrity_finding in self.celebrities[timestamp_millis]:
+                        if celebrity_finding.is_matching_face(face_finding.top, face_finding.left, face_finding.height, face_finding.width): 
+                            face_found_in_celebrities_list = True
+
+                # Only add if the face is not found in the celebrity list
+                if not face_found_in_celebrities_list:
+                    # Only add if there is no other face with similar age range at the same millisecond.
+                    if not face_finding.is_duplicate(self.faces[timestamp_millis]):
+                        self.faces[timestamp_millis].append(face_finding)
+    
+
+    def extract_frames_for_vqa(self):
+        if self.video == None:
+            raise Exception("detect_faces_and_celebrities is called before the video is loaded")
+
+        video = self.video
         timestamp_millis: int
         for timestamp_millis in range(0, self.video_duration_millis, self.frame_interval):
             video.set(cv2.CAP_PROP_POS_MSEC, int(timestamp_millis))
@@ -225,83 +356,56 @@ class VideoPreprocessor(ABC):
             io_stream = io.BytesIO()
             image_pil.save(io_stream, format='JPEG')
             image = io_stream.getvalue()
+            self.frame_bytes.append([timestamp_millis, image])
 
-            system_prompt = "You are an expert in extracting information from video frames. Each video frame is an image. You will extract the scene, text, and more information."
-            task_prompt =   "Extract information from this image and output a JSON with this format:\n" \
-                        "{\n" \
-                        "\"scene\" : \"String\",\n" \
-                        "\"text\" : [\"String\", \"String\" , . . .],\n" \
-                        "\"has_face\": \"Integer\"\n" \
-                        "}\n" \
-                        "For \"scene\", describe what you see in the image in detail, yet succinct. If the scene is very similar to the scene of previous frame, then just say \"Similar to previous.\" The previous scene is {previous_scene}. \n" \
-                        "For \"text\", list the text you see in that image confidently.\n" \
-                        "For \"has_face\": \"1\" for True or \"0\" for False on whether you see face in the picture."
-            vqa_response = self.call_vqa(image_data=base64.b64encode(image).decode("utf-8"), system_prompt = system_prompt, task_prompt=task_prompt) 
+    def _what_is_inside_this_frame(self, system_prompt, frame_info):
+        timestamp_millis = frame_info[0]
+        image = frame_info[1]
 
-            # Sometimes the response might be censored due to false positive of inappropriate content. When that happens, just skip this frame.
-            try:
-                parsed_vqa_results = json.loads(vqa_response)
-            except:
-                continue
+        system_prompt = "You are an expert in extracting information from video frames. Each video frame is an image. You will extract the scene, text, and more information."
+        task_prompt =   "Extract information from this image and output a JSON with this format:\n" \
+                    "{\n" \
+                    "\"scene\" : \"String\",\n" \
+                    "\"text\" : [\"String\", \"String\" , . . .],\n" \
+                    "}\n" \
+                    "For \"scene\", describe what you see in the image in detail, yet succinct. \n" \
+                    "For \"text\", list the text you see in that image confidently.\n"
+        vqa_response = self.call_vqa(image_data=base64.b64encode(image).decode("utf-8"), system_prompt = system_prompt, task_prompt=task_prompt) 
 
-            self.visual_scenes[timestamp_millis] = parsed_vqa_results["scene"]
-            self.visual_texts[timestamp_millis] = parsed_vqa_results["text"]
-            previous_scene = parsed_vqa_results["scene"]
+        # Sometimes the response might be censored due to false positive of inappropriate content. When that happens, just skip this frame.
+        try:
+            parsed_vqa_results = json.loads(vqa_response)
+        except:
+            return
 
-            if int(parsed_vqa_results["has_face"]) == 1:
+        self.visual_scenes[timestamp_millis] = parsed_vqa_results["scene"]
+        self.visual_texts[timestamp_millis] = parsed_vqa_results["text"]
+    
+    def extract_scenes_from_vqa(self):
+        timestamp_millis: int
+        image: bytes
+          
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            executor.map(self._what_is_inside_this_frame, self.frame_bytes)
 
-                # Call Rekognition to detect celebrity
-                recognize_celebrity_response: dict = self.rekognition_client.recognize_celebrities(Image={'Bytes': image})
-                celebrity_findings: list[dict] = recognize_celebrity_response["CelebrityFaces"]
-                unrecognized_faces: list[dict] = recognize_celebrity_response["UnrecognizedFaces"]
-                
-                # Parse Rekognition celebrity detection data and add to dictionary as appropriate
-                if len(celebrity_findings) > 0:
-                    if timestamp_millis not in self.celebrities: self.celebrities[timestamp_millis] = []
-                    celebrity_finding_dict: dict
-                    for celebrity_finding_dict in celebrity_findings:
-                        if int(celebrity_finding_dict["MatchConfidence"]) < CelebrityFinding.celebrity_match_confidence_threshold: continue
-                        celebrity_finding = CelebrityFinding(celebrity_finding_dict)
-                        self.celebrities[timestamp_millis].append(celebrity_finding)
-
-                # Only call the detect face APU if there are other faces beside the recognized celebrity in this frame
-                # This also applies when there is 0 celebrity detected, but there are more faces in the frame.
-                if len(unrecognized_faces) == 0: continue
-
-                # Call Rekognition to detect faces
-                face_findings: dict = self.rekognition_client.detect_faces(Image={'Bytes': image}, Attributes=['ALL'])['FaceDetails']
-
-                if len(face_findings) == 0: continue
-
-                if timestamp_millis not in self.faces: self.faces[timestamp_millis] = []
-                face_finding_dict: dict
-                for face_finding_dict in face_findings:
-                    if int(face_finding_dict["Confidence"]) < FaceFinding.face_detection_confidence_threshold : continue
-                    face_finding = FaceFinding(face_finding_dict)
-
-                    # The below code checks if this face is already captured as celebrity by checking the bounding box for the detected celebrities at this frame
-                    face_found_in_celebrities_list = False
-                    if timestamp_millis in self.celebrities:
-                        for celebrity_finding in self.celebrities[timestamp_millis]:
-                            if celebrity_finding.is_matching_face(face_finding.top, face_finding.left, face_finding.height, face_finding.width): 
-                                face_found_in_celebrities_list = True
-
-                    # Only add if the face is not found in the celebrity list
-                    if not face_found_in_celebrities_list:
-                        # Only add if there is no other face with similar age range at the same millisecond.
-                        if not face_finding.is_duplicate(self.faces[timestamp_millis]):
-                            self.faces[timestamp_millis].append(face_finding)
     
     def wait_for_dependencies(self):
+        self.wait_for_rekognition_label_detection()
         self.wait_for_transcription_job()
 
     def run(self):
-        self.extract_information_from_vqa()
+        self.download_video() 
+        self.load_video()
+        self.iterate_object_detection_result()
+        self.detect_faces_and_celebrities()
+        self.extract_frames_for_vqa()
+        self.extract_scenes_from_vqa()
         self.fetch_transcription()
-        return self.visual_scenes, self.visual_texts, self.transcript, self.celebrities, self.faces
+        return self.visual_objects, self.visual_scenes, self.visual_texts, self.transcript, self.celebrities, self.faces
 
 class VideoPreprocessorBedrockVQA(VideoPreprocessor):
     def __init__(self, 
+        label_detection_job_id: str,
         transcription_job_name: str,
         bucket_name: str,
         video_s3_path: str,
@@ -310,7 +414,8 @@ class VideoPreprocessorBedrockVQA(VideoPreprocessor):
         vqa_model_name: str
         ):
 
-        super().__init__(transcription_job_name=transcription_job_name, 
+        super().__init__(label_detection_job_id=label_detection_job_id,
+            transcription_job_name=transcription_job_name, 
             bucket_name=bucket_name,
             video_s3_path=video_s3_path,
             video_transcript_s3_path=video_transcript_s3_path,
@@ -360,7 +465,8 @@ class VideoAnalyzer(ABC):
         bucket_name: str,
         video_name: str, 
         video_path: str, 
-        visual_scenes: dict[int, list[str]], 
+        visual_objects: dict[int, list[str]],
+        visual_scenes: dict[int, str], 
         visual_texts: dict[int, list[str]], 
         transcript: dict,
         celebrities: dict[int, list[str]],
@@ -377,11 +483,13 @@ class VideoAnalyzer(ABC):
         self.video_script_folder: str = video_script_folder
         self.video_name: str = video_name
         self.video_path: str = video_path
+        self.original_visual_objects: dict[int, list[str]] = visual_objects
         self.original_visual_scenes: dict[int, str] = visual_scenes
         self.original_visual_texts: dict[int, list[str]] = visual_texts
         self.original_transcript: dict = transcript
         self.original_celebrities: dict[int, list[CelebrityFinding]] = celebrities
         self.original_faces: dict[int, list[FaceFinding]] = faces
+        self.visual_objects: list[list[Union[int, list[str]]]] = []
         self.visual_scenes: list[list[Union[int, str]]] = []
         self.visual_texts: list[list[Union[int, list[str]]]] = []
         self.transcript: list[list[Union[int, str]]] = []
@@ -393,6 +501,7 @@ class VideoAnalyzer(ABC):
         self.video_script_chunk_overlap_for_entities_extraction: int = 500 #200 # characters
         self.video_script_storage_chunk_size: int = 768 #10000 # Number of characters, which depends on the embedding model
         self.text_similarity_score: float = 0.9
+        self.objects_similarity_score: float = 0.8
         self.video_rolling_summary: str = ""
         self.video_rolling_sentiment: str = ""
         self.combined_video_script: str = ""
@@ -434,6 +543,30 @@ class VideoAnalyzer(ABC):
     @abstractmethod
     def call_embedding_llm(self, document):
         pass
+    
+    def preprocess_visual_objects(self):
+        visual_objects_across_timestamps = dict(sorted(copy.deepcopy(self.original_visual_objects).items()))
+        prev_objects: list = []
+
+        timestamp_millis: int
+        visual_objects_at_particular_timestamp: list
+        for timestamp_millis, visual_objects_at_particular_timestamp in list(visual_objects_across_timestamps.items()):
+            # The loop below is to check how much of these objects resembling previous objects
+            num_of_matches_with_prev_objects: int = 0
+            visual_object: str
+            for visual_object in visual_objects_at_particular_timestamp:
+                if visual_object in prev_objects: num_of_matches_with_prev_objects += 1
+            # Delete objects entry if there is no detected object
+            if len(visual_objects_at_particular_timestamp) == 0: 
+                del visual_objects_across_timestamps[timestamp_millis]
+            # Delete objects entry if the detected objects are too similar with the previous objects
+            elif float(num_of_matches_with_prev_objects) > len(prev_objects)*self.ojbects_similarity_score:
+                del visual_objects_across_timestamps[timestamp_millis]
+            else:
+                prev_objects = visual_objects_at_particular_timestamp
+      
+        self.visual_objects = sorted(visual_objects_across_timestamps.items())
+        # TODO : Store this in DB and use in analytics
   
     def preprocess_visual_scenes(self):
         self.visual_scenes =  sorted(self.original_visual_scenes.items())
@@ -462,14 +595,12 @@ class VideoAnalyzer(ABC):
         self.visual_texts = sorted(visual_texts_across_timestamps.items())
 
     def preprocess_transcript(self):
-        transcript= {}
-        #word_start_time = None
-        #sentence_start_time = -1
-        #sentence = ""
+        transcript= dict()
         previous_millis: int = 0
         for item in self.original_transcript["results"]["items"]:
             if item['type'] == 'punctuation':
-                transcript[previous_millis] = item['alternatives'][0]['content']
+                current_millis = previous_millis + 1 # Just add 1 millisecond to avoid this punctuation replaces the previous word.
+                transcript[curent_millis] = item['alternatives'][0]['content']
             else:
                 try:
                     time_millis: int = int(float(item['start_time'])*1000) # In millisecond
@@ -487,10 +618,10 @@ class VideoAnalyzer(ABC):
                     transcript[time_millis] = content
                     previous_millis = time_millis
                 except Exception as e:
-                    print("Error in transcribing")
+                    print("Error in transcribing") 
                     raise e
-                    
-        self.transcript = transcript
+
+        self.transcript = sorted(transcript.items())
 
     def preprocess_celebrities(self):
         self.celebrities = sorted(self.original_celebrities.items())
@@ -916,7 +1047,8 @@ class VideoAnalyzerBedrock(VideoAnalyzer):
         bucket_name: str,
         video_name: str, 
         video_path: str, 
-        visual_scenes: dict[int, list[str]], 
+        visual_objects: dict[int, list[str]],
+        visual_scenes: dict[int, str], 
         visual_texts: dict[int, list[str]], 
         transcript: dict,
         celebrities: dict[int, list[str]],
@@ -994,6 +1126,7 @@ def handler():
     try:
         # Initiate class for video preprocessing
         video_preprocessor = VideoPreprocessorBedrockVQA( 
+            label_detection_job_id=label_detection_job_id,
             transcription_job_name=transcription_job_name,
             bucket_name=bucket_name,
             video_s3_path=video_s3_path,
@@ -1005,7 +1138,7 @@ def handler():
         video_preprocessor.wait_for_dependencies()
         
         # Preprocess and extract information
-        visual_scenes, visual_texts, transcript, celebrities, faces = video_preprocessor.run()
+        visual_objects, visual_scenes, visual_texts, transcript, celebrities, faces = video_preprocessor.run()
         
         # Initiate class for video analysis
         video_analyzer = VideoAnalyzerBedrock(
@@ -1014,6 +1147,7 @@ def handler():
             bucket_name=bucket_name,
             video_name=video_name,
             video_path=video_path,
+            visual_objects=visual_objects,
             visual_scenes=visual_scenes,
             visual_texts=visual_texts, 
             transcript=transcript,

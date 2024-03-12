@@ -34,8 +34,6 @@ vqa_model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
 frame_interval = "500" # millisecond
 chat_model_id = "anthropic.claude-instant-v1"
 embedding_model_id = "cohere.embed-multilingual-v3"
-visual_scene_detection_confidence_threshold = 80.0
-visual_text_detection_confidence_threshold = 92.0
 raw_folder = "source"
 summary_folder = "summary"
 video_script_folder = "video_timeline"
@@ -49,6 +47,7 @@ content_table_name = "content"
 embedding_dimension = 1024
 video_search_by_summary_acceptable_embedding_distance = 0.63 # Using cosine distance
 videos_api_resource = "videos"
+visual_objects_detection_confidence_threshold = 80.0
 
 BASE_DIR = os.getcwd()
 
@@ -364,6 +363,63 @@ class VideoUnderstandingSolutionStack(Stack):
             result_path="$.preprocessingResult",
         )
 
+        # Step function task to start the Rekognition label detection task to detect visual scenes
+        start_rekognition_label_detection_sfn_task = _sfn_tasks.CallAwsService(
+            self,
+            "StartRekognitionLabelDetectionSfnTask",
+            service="rekognition",
+            action="startLabelDetection",
+            parameters={
+                "Video": {
+                    "S3Object": {
+                        "Bucket": video_bucket_s3.bucket_name,
+                        "Name.$": "$.videoS3Path",
+                    }
+                },
+                "MinConfidence": visual_objects_detection_confidence_threshold,
+            },
+            result_path="$.startLabelDetectionResult",
+            iam_resources=["*"],
+            additional_iam_statements=[
+                _iam.PolicyStatement(
+                    actions=["s3:GetObject", "s3:ListBucket"], 
+                    resources=[
+                        f"arn:aws:s3:::{video_bucket_s3.bucket_name}", 
+                        f"arn:aws:s3:::{video_bucket_s3.bucket_name}/{raw_folder}/*"
+                    ]
+                )
+            ],
+        )
+
+        # Step function task to check the status of the Rekognition label detection task to detect visual scenes
+        get_rekognition_label_detection_sfn_task = _sfn_tasks.CallAwsService(
+            self,
+            "GetRekognitionLabelDetectionSfnTask",
+            service="rekognition",
+            action="getLabelDetection",
+            parameters={
+                "JobId.$": "$.startLabelDetectionResult.JobId",
+                "MaxResults": 1
+            },
+            result_path="$.labelDetectionResult",
+            result_selector={
+                "JobId.$": "$.JobId",
+                "JobStatus.$": "$.JobStatus"
+            },
+            iam_resources=["*"],
+        )
+
+        label_detection_success = _sfn.Succeed(self, "Label detection is successful")
+        label_detection_failure = _sfn.Pass(self, "Label detection is failed, but continuing anyway.")
+        label_detection_choice = _sfn.Choice(self, "Label detection choice")
+        label_detection_success_condition = _sfn.Condition.string_equals("$.labelDetectionResult.JobStatus", "SUCCEEDED")
+        label_detection_failure_condition = _sfn.Condition.string_equals("$.labelDetectionResult.JobStatus", "FAILED")
+        label_detection_wait = _sfn.Wait(self, "Label detection wait",time=_sfn.WaitTime.duration(Duration.seconds(30))).next(get_rekognition_label_detection_sfn_task)
+
+        # Build the flow
+        start_rekognition_label_detection_sfn_task.next(get_rekognition_label_detection_sfn_task).next(label_detection_choice)
+        label_detection_choice.when(label_detection_success_condition, label_detection_success).when(label_detection_failure_condition,label_detection_failure).otherwise(label_detection_wait)
+
         # Step function task to start the Transcribe transcription task to extract human voice and transcribe it
         start_transcription_job_sfn_task = _sfn_tasks.CallAwsService(
             self,
@@ -431,8 +487,7 @@ class VideoUnderstandingSolutionStack(Stack):
         # Define the parallel tasks for Rekognition and Transcribe.
         parallel_sfn = _sfn.Parallel(self, "StartVideoAnalysisParallelSfn")
         parallel_sfn = parallel_sfn.branch(
-            #start_rekognition_label_detection_sfn_task,
-            #start_rekognition_text_detection_sfn_task,
+            start_rekognition_label_detection_sfn_task,
             start_transcription_job_sfn_task,
         )
 
@@ -569,7 +624,8 @@ class VideoUnderstandingSolutionStack(Stack):
                 container_definition=analyzer_container_definition,
                 environment=[
                     _sfn_tasks.TaskEnvironmentVariable(name="VIDEO_S3_PATH", value=_sfn.JsonPath.string_at("$[0].videoS3Path")),
-                    _sfn_tasks.TaskEnvironmentVariable(name="TRANSCRIPTION_JOB_NAME", value=_sfn.JsonPath.string_at("$[0].transcriptionResult.TranscriptionJobName")),
+                    _sfn_tasks.TaskEnvironmentVariable(name="LABEL_DETECTION_JOB_ID", value=_sfn.JsonPath.string_at("$[0].labelDetectionResult.JobId")),
+                    _sfn_tasks.TaskEnvironmentVariable(name="TRANSCRIPTION_JOB_NAME", value=_sfn.JsonPath.string_at("$[1].transcriptionResult.TranscriptionJobName")),
                     _sfn_tasks.TaskEnvironmentVariable(name='DATABASE_NAME', value= database_name),
                     _sfn_tasks.TaskEnvironmentVariable(name='VIDEO_TABLE_NAME', value= video_table_name),
                     _sfn_tasks.TaskEnvironmentVariable(name='ENTITIES_TABLE_NAME', value= entities_table_name),

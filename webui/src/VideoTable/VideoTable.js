@@ -251,6 +251,7 @@ export class VideoTable extends Component {
     var [videoScriptPrompt, chatPrompt, closingPrompt] = ["","",""]
 
     videoScriptPrompt += "Below is the video timeline with information about the voice heard in the video, visual scenes seen, visual text visible, and any face or celebrity detected. "
+    videoScriptPrompt += "For voice, the same speaker number ALWAYS indicates the same person.\n"
     videoScriptPrompt += "The numbers on the left represents the seconds into the video where the information was extracted.\n"
     videoScriptPrompt += `<VideoTimeline>\n${video.videoScript}</VideoTimeline>\n\n`
 
@@ -311,6 +312,7 @@ export class VideoTable extends Component {
 
       // Construct the prompt containing the video script (the text representation of the current part of the video)
       videoScriptPrompt += "The video timeline has information about the voice heard in the video, visual scenes seen, visual texts visible, and any face or celebrity detected. "
+      videoScriptPrompt += "For voice, the same speaker number ALWAYS indicates the same person.\n"
       videoScriptPrompt += "The numbers on the left represents the seconds into the video where the information was extracted.\n"
       videoScriptPrompt += `Because the video is long, the video timeline is split into ${numberOfFragments} parts. `
       if (currentFragment == numberOfFragments){
