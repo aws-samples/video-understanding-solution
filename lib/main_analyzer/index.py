@@ -152,6 +152,16 @@ class FaceFinding():
         
         return display_string
 
+class ObjectFinding():
+    confidence_score_threshold: float = 80.0
+    top_n_threshold: int = 10
+    def __init__(self, label: str, confidence_score: float):
+        self.label: str = label
+        self.confidence_score: float = confidence_score
+    
+    def display(self) -> str:
+        return self.label
+
 class VideoPreprocessor(ABC):
     def __init__(self, 
         label_detection_job_id: str,
@@ -171,14 +181,14 @@ class VideoPreprocessor(ABC):
         self.video_transcript_s3_path: str = video_transcript_s3_path
         self.video_duration_seconds: float  = 0.0
         self.video_duration_millis: int = 0
-        self.visual_objects: dict[int, list[str]] = {}
-        self.person_timestamps_millis: list[int] = []
+        self.visual_objects: dict[int, list[ObjectFinding]] = {}
         self.visual_scenes: dict[int, str] = {}
         self.visual_texts: dict[int, list[str]] = {}
         self.transcript: dict
-        self.celebrities: dict[int, list[str]] = {}
-        self.faces: dict[int, list[str]] = {}
+        self.celebrities: dict[int, list[CelebrityFinding]] = {}
+        self.faces: dict[int, list[FaceFinding]] = {}
         self.person_timestamps_millis: list[int] = []
+        self.text_timestamps_millis: list[int] = []
         self.frame_interval: int = int(frame_interval) # Millisecond
         self.frame_dim_for_vqa: tuple(int) = (512, 512)
         self.video_filename = ""
@@ -190,10 +200,10 @@ class VideoPreprocessor(ABC):
         pass
 
     def wait_for_rekognition_label_detection(self, sort_by):
-        get_object_detection = self.rekognition.get_label_detection(JobId=self.label_detection_job_id, SortBy=sort_by)
+        get_object_detection = self.rekognition_client.get_label_detection(JobId=self.label_detection_job_id, SortBy=sort_by)
         while(get_object_detection['JobStatus'] == 'IN_PROGRESS'):
             time.sleep(5)
-            get_object_detection = self.rekognition.get_label_detection(JobId=self.label_detection_job_id, SortBy=sort_by)
+            get_object_detection = self.rekognition_client.get_label_detection(JobId=self.label_detection_job_id, SortBy=sort_by)
 
     def wait_for_transcription_job(self):
         get_transcription = self.transcribe_client.get_transcription_job(TranscriptionJobName=self.transcription_job_name)
@@ -215,17 +225,22 @@ class VideoPreprocessor(ABC):
                 self.visual_objects[timestamp_millis] = objects_at_this_timestamp
 
             object_name: str = label['Label']['Name']
+            confidence: float = label['Label']['Confidence']
 
             # If this is a Person object, then register this into the timestamp list for face detection.
             if object_name == "Person":
                 self.person_timestamps_millis.append(timestamp_millis)
+            
+            if object_name == "Text":
+                self.text_timestamps_millis.append(timestamp_millis)
 
             if (object_name not in objects_at_this_timestamp):
                 # Append the object name to the list of objects for timestamp second
-                objects_at_this_timestamp.append(object_name)
+                object_finding = ObjectFinding(label=object_name, confidence_score=confidence)
+                objects_at_this_timestamp.append(object_finding)
   
     def iterate_object_detection_result(self):
-        get_object_detection_result: dict = self.rekognition.get_label_detection(
+        get_object_detection_result: dict = self.rekognition_client.get_label_detection(
             JobId=self.label_detection_job_id,
             MaxResults=1000,
             SortBy='TIMESTAMP'
@@ -241,7 +256,7 @@ class VideoPreprocessor(ABC):
 
         # In case results is large, iterate the next pages until no more page left.
         while("NextToken" in get_object_detection_result):
-            get_object_detection_result: dict = self.rekognition.get_label_detection(
+            get_object_detection_result: dict = self.rekognition_client.get_label_detection(
                 JobId=self.label_detection_job_id,
                 MaxResults=1000,
                 NextToken=get_object_detection_result["NextToken"]
@@ -259,8 +274,8 @@ class VideoPreprocessor(ABC):
 
     def load_video(self):
         self.video: cv2.VideoCapture = cv2.VideoCapture(self.video_filename)
-        frame_count = video.get(cv2.CAP_PROP_FRAME_COUNT)
-        fps = video.get(cv2.CAP_PROP_FPS)
+        frame_count = self.video.get(cv2.CAP_PROP_FRAME_COUNT)
+        fps = self.video.get(cv2.CAP_PROP_FPS)
         self.video_duration_seconds = float(frame_count/fps)
         self.video_duration_millis = int(self.video_duration_seconds*1000)
     
@@ -339,7 +354,7 @@ class VideoPreprocessor(ABC):
 
         video = self.video
         timestamp_millis: int
-        for timestamp_millis in range(0, self.video_duration_millis, self.frame_interval):
+        for timestamp_millis in (list(range(0, self.video_duration_millis, self.frame_interval)) + self.text_timestamps_millis):
             video.set(cv2.CAP_PROP_POS_MSEC, int(timestamp_millis))
             success, frame = video.read()
             # Resize frame to 512 x 512 px
@@ -390,7 +405,7 @@ class VideoPreprocessor(ABC):
 
     
     def wait_for_dependencies(self):
-        self.wait_for_rekognition_label_detection()
+        self.wait_for_rekognition_label_detection(sort_by="TIMESTAMP")
         self.wait_for_transcription_job()
 
     def run(self):
@@ -483,7 +498,7 @@ class VideoAnalyzer(ABC):
         self.video_script_folder: str = video_script_folder
         self.video_name: str = video_name
         self.video_path: str = video_path
-        self.original_visual_objects: dict[int, list[str]] = visual_objects
+        self.original_visual_objects: dict[int, list[ObjectFinding]] = visual_objects
         self.original_visual_scenes: dict[int, str] = visual_scenes
         self.original_visual_texts: dict[int, list[str]] = visual_texts
         self.original_transcript: dict = transcript
@@ -546,24 +561,15 @@ class VideoAnalyzer(ABC):
     
     def preprocess_visual_objects(self):
         visual_objects_across_timestamps = dict(sorted(copy.deepcopy(self.original_visual_objects).items()))
-        prev_objects: list = []
 
         timestamp_millis: int
         visual_objects_at_particular_timestamp: list
         for timestamp_millis, visual_objects_at_particular_timestamp in list(visual_objects_across_timestamps.items()):
-            # The loop below is to check how much of these objects resembling previous objects
-            num_of_matches_with_prev_objects: int = 0
-            visual_object: str
-            for visual_object in visual_objects_at_particular_timestamp:
-                if visual_object in prev_objects: num_of_matches_with_prev_objects += 1
-            # Delete objects entry if there is no detected object
-            if len(visual_objects_at_particular_timestamp) == 0: 
-                del visual_objects_across_timestamps[timestamp_millis]
-            # Delete objects entry if the detected objects are too similar with the previous objects
-            elif float(num_of_matches_with_prev_objects) > len(prev_objects)*self.ojbects_similarity_score:
-                del visual_objects_across_timestamps[timestamp_millis]
-            else:
-                prev_objects = visual_objects_at_particular_timestamp
+            visual_objects_at_particular_timestamp.sort(key=lambda object_finding: object_finding.confidence_score, reverse=True)
+            
+            # Find the top N of the identified visual objects who have confidence score >= threshold, and return the object label name only
+            top_n_threshold = ObjectFinding.top_n_threshold
+            visual_objects_at_particular_timestamp = [object_finding.display() for object_finding in filter(lambda obj: obj.confidence_score >= ObjectFinding.confidence_score_threshold, visual_objects_at_particular_timestamp )][:top_n_threshold]
       
         self.visual_objects = sorted(visual_objects_across_timestamps.items())
         # TODO : Store this in DB and use in analytics
@@ -630,6 +636,12 @@ class VideoAnalyzer(ABC):
         self.faces = sorted(self.original_faces.items())
       
     def generate_combined_video_script(self):
+        def transform_objects(x):
+            timestamp = round(x[0]/1000, 1) # Convert millis to second
+            objects = ",".join(x[1])
+            return (timestamp, f"Objects:{objects}")
+        objects  = list(map(transform_objects, self.visual_objects))
+
         def transform_scenes(x):
             timestamp = round(x[0]/1000, 1) # Convert millis to second
             scene = x[1]
@@ -661,7 +673,7 @@ class VideoAnalyzer(ABC):
         visual_faces = list(map(transform_faces, self.faces))
  
         # Combine all inputs
-        combined_video_script = sorted( scenes + visual_texts + transcript + visual_celebrities + visual_faces )
+        combined_video_script = sorted( objects + scenes + visual_texts + transcript + visual_celebrities + visual_faces )
         
         combined_video_script = "\n".join(list(map(lambda x: f"{x[0]}:{x[1]}", combined_video_script)))
         
@@ -1057,7 +1069,7 @@ class VideoAnalyzerBedrock(VideoAnalyzer):
         entity_sentiment_folder: str,
         video_script_folder: str
         ):
-        super().__init__(bucket_name, video_name, video_path, visual_scenes, visual_texts, transcript, celebrities, faces,summary_folder, entity_sentiment_folder, video_script_folder)
+        super().__init__(bucket_name, video_name, video_path, visual_objects, visual_scenes, visual_texts, transcript, celebrities, faces,summary_folder, entity_sentiment_folder, video_script_folder)
         
         config = Config(read_timeout=1000) # Extends botocore read timeout to 1000 seconds
         self.bedrock_client = boto3.client(service_name="bedrock-runtime", config=config)
