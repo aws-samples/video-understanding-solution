@@ -255,8 +255,9 @@ export class VideoTable extends Component {
     videoScriptPrompt += "Also, here are the entities and sentiment that you previously extracted. Each row is entity|sentiment|sentiment's reason:\n"
     videoScriptPrompt += `${video.rawEntities}\n\n`
 
-    videoScriptPrompt += "Below is the video timeline with information about the voice heard in the video, visual scenes seen, visual text visible, and any face or celebrity detected. "
-    videoScriptPrompt += "For voice, the same speaker number ALWAYS indicates the same person.\n"
+    videoScriptPrompt += "Below is the video timeline with information about the voice heard in the video, visual scenes seen, visual text visible, and any face or celebrity visible.\n"
+    videoScriptPrompt += "For voice, the same speaker number ALWAYS indicates the same person throughout the video.\n"
+    videoScriptPrompt += "For faces, while the estimated age may differ across timestamp, if they are very close, they can refer to the same person.\n"
     videoScriptPrompt += "The numbers on the left represents the seconds into the video where the information was extracted.\n"
     videoScriptPrompt += `<VideoTimeline>\n${video.videoScript}</VideoTimeline>\n\n`
 
@@ -320,8 +321,9 @@ export class VideoTable extends Component {
       videoScriptPrompt += `${video.rawEntities}\n\n`
 
       // Construct the prompt containing the video script (the text representation of the current part of the video)
-      videoScriptPrompt += "The video timeline has information about the voice heard in the video, visual scenes seen, visual texts visible, and any face or celebrity detected. "
-      videoScriptPrompt += "For voice, the same speaker number ALWAYS indicates the same person.\n"
+      videoScriptPrompt += "The video timeline has information about the voice heard in the video, visual scenes seen, visual texts visible, and any face or celebrity visible.\n"
+      videoScriptPrompt += "For voice, the same speaker number ALWAYS indicates the same person throughout the video.\n"
+      videoScriptPrompt += "For faces, while the estimated age may differ across timestamp, if they are very close, they can refer to the same person.\n"
       videoScriptPrompt += "The numbers on the left represents the seconds into the video where the information was extracted.\n"
       videoScriptPrompt += `Because the video is long, the video timeline is split into ${numberOfFragments} parts. `
       if (currentFragment == numberOfFragments){
@@ -421,8 +423,6 @@ export class VideoTable extends Component {
     systemPrompt += "Answer SUCCINCTLY like examples below:\n"
     systemPrompt += "Question: Who is the first narrator and how does the person look like?\n"
     systemPrompt += "Answer: The first narrator is likely Tom Bush. He is around 25-30 years old man with beard and mustache. He appears to be happy throughout the video.\n"
-    systemPrompt += "Question: Why did you give a positive sentiment for the XYZ company?\n"
-    systemPrompt += "Answer: It was mentioned at around 14 seconds mark that the narrator, Tom Bush, who is a business partner of XYZ, praises the XYZ company.\n"
     systemPrompt += "Question: Did Oba smile at the end of the video?\n"
     systemPrompt += "Answer: Yes he did.\n"
     systemPrompt += "Question: When did he smile?\n"
