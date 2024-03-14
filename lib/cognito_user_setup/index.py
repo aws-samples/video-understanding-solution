@@ -24,8 +24,6 @@ def on_create(event):
     
     user_pool = client.describe_user_pool(UserPoolId=props['user_pool_id'])['UserPool']
     
-    print(user_pool)
-    
     user_pool['AdminCreateUserConfig'] = {}
 
     user_pool['AdminCreateUserConfig']['AllowAdminCreateUserOnly'] = True
@@ -34,9 +32,6 @@ def on_create(event):
     user_pool['AdminCreateUserConfig']['InviteMessageTemplate']['SMSMessage'] = f"Hello {{username}}. Temporary password is {{####}}  The video understanding portal will be at {props['url']}"
     user_pool['AdminCreateUserConfig']['InviteMessageTemplate']['EmailMessage'] = f"Hello {{username}}, welcome to video understanding solution. Your temporary password is {{####}}  The video understanding portal will be at {props['url']}"
     user_pool['AdminCreateUserConfig']['InviteMessageTemplate']['EmailSubject'] = 'Welcome to the video understanding solution'
-  
-    
-    print(user_pool)
     
     response = client.update_user_pool(
         UserPoolId=props['user_pool_id'],

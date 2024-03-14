@@ -2,9 +2,9 @@
 
 ## Introduction
 
-This is a deployable solution which can help save your time in understanding the videos you have without having to watch every video. This solution automatically generate AI-powered summary and entities extraction of each video uploaded to your Amazon Simple Storage Service (S3) bucket. It also allows you to ask questions about the video in a UI chatbot experience, like "What is funny about the video?" and "How does Jeff Bezos look like in this video?". You can also use the search filter to search for videos using generative-AI-powered semantic search e.g. "Amazon's culture and history". This solution extracts information from visual scenes, audio, visible texts, and detected celebrities or faces in the video. It leverages an LLM which can understand visual and describe the video frames.
+This is a deployable solution to help save your time in understanding videos without having to watch every video. You can upload videos and this solution can generate AI-powered summary and entities extraction for each video. It also supports Q&A about the video like "What is funny about the video?", "How does Jeff Bezos look like there?", and "What shirt did he wear?". You can also search for videos using semantic search e.g. "Amazon's culture and history". This solution extracts information from visual scenes, audio, visible texts, and detected celebrities or faces in the video. It leverages an LLM which can understand visual and describe the video frames.
 
-You can upload videos to your S3 bucket by using AWS console, CLI, SDK, or other means (e.g. via AWS Transfer Family). This solution will automatically trigger processes including call to Amazon Transcribe for voice transcription and call to Amazon Bedrock with Claude 3 model to extract scenes and text. The LLM used can perform VQA (visual question answering) from images (video frames), which is used to extract the scene, text, and whether face is detected. When face is identified from the visual scene extraction, it will use celebrity and face detection by Amazon Rekognition. This combined information is used to generate the summary and entities extraction as powered by generative AI with Amazon Bedrock. The UI chatbot also uses Amazon Bedrock for the Q&A chatbot. The summaries, entities, and combined extracted information are stored in S3 bucket, available to be used for further custom analytics. Refer to the diagram below on the architecture.
+You can upload videos to your Amazon Simple Storage Service (S3) bucket bucket by using AWS console, CLI, SDK, or other means (e.g. via AWS Transfer Family). This solution will automatically trigger processes including call to Amazon Transcribe for voice transcription, call to Amazon Rekognition to extract the objects visible, and call to Amazon Bedrock with Claude 3 model to extract scenes and visually visible text. The LLM used can perform VQA (visual question answering) from images (video frames), which is used to extract the scene and text. This combined information is used to generate the summary and entities extraction as powered by generative AI with Amazon Bedrock. The UI chatbot also uses Amazon Bedrock for the Q&A chatbot. The summaries, entities, and combined extracted information are stored in S3 bucket, available to be used for further custom analytics. Refer to the diagram below on the architecture.
 
 ![Architecture](./assets/architecture.jpg)
 
@@ -72,7 +72,7 @@ The cost of using this solution is determined by the pricing and usage of the co
 
 2. More variable components (driven mainly by the total number of video minutes being processed and the activities e.g. chat):
 
-    2.1. Amazon Rekognition - Pricing is [here](https://aws.amazon.com/rekognition/pricing/). You may be eligible for its FREE TIER for image analysis. This solution uses DetectFaces and RecognizeCelebrities image APIs. The cost can vary based on the number of detected faces in the whole videos.
+    2.1. Amazon Rekognition - Pricing is [here](https://aws.amazon.com/rekognition/pricing/). You may be eligible for its FREE TIER for image and video analysis. This solution uses StartLabelDetection and GetLabelDetection video APIs in addition to DetectFaces and RecognizeCelebrities image APIs. The cost can vary based on the number of detected faces in the whole videos.
 
     2.2. Amazon Transcribe - Pricing is [here](https://aws.amazon.com/transcribe/pricing/). Youo may be eligible for its FREE TIER. This solution uses Standard Batch transcription. The cost can vary based on the video duration and the number of videos being processed.
 
@@ -93,7 +93,7 @@ It is recommended to test with smaller number of shorter videos first and observ
 
 1. Currently only .mp4/.MP4 video files are supported
 2. The language supported is limited by the language supported by Amazon Rekognition text detection, Amazon Transcribe, and the models used in Amazon Bedrock.
-3. Summary generation and entity extraction is tested for video up to 3+ hours. However, the chat feature works best for video under 15 minutes in terms of latency.
+3. This works best for video under 15 minutes. It may have issue or show slow latency for very long video at the moment.
 4. Video file names (when uploaded) must adhere to the [S3 object key pattern](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html). When uploaded via this solution's UI, it will automatically convert non-compliant characters to _ (underscore).
 
 ## Removal
@@ -129,3 +129,8 @@ This information is meant for the contributors of the repository or builders who
 ## License
 
 This library is licensed under the MIT-0 License. See the LICENSE file.
+
+## Notes
+
+* The facial recognition in this solution is provided by Amazon Rekognition.
+* Please refer to the CODE_OF_CONDUCT.md file to see the terms of use and acceptable use policy. Some AI models have prohibition on what to use the model for. Refer to the architecture diagram above to see what models are being used by this solution and for which part.

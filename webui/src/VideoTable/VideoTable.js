@@ -248,7 +248,12 @@ export class VideoTable extends Component {
   }
 
   async retrieveAnswerForShortVideo(video, systemPrompt){
-    var [videoScriptPrompt, chatPrompt, closingPrompt] = ["","",""]
+    var [videoScriptPrompt, chatPrompt] = ["",""]
+
+    videoScriptPrompt += "To help you, here is the summary of the whole video that you previously wrote:\n"
+    videoScriptPrompt += `${video.summary}\n\n`
+    videoScriptPrompt += "Also, here are the entities and sentiment that you previously extracted. Each row is entity|sentiment|sentiment's reason:\n"
+    videoScriptPrompt += `${video.rawEntities}\n\n`
 
     videoScriptPrompt += "Below is the video timeline with information about the voice heard in the video, visual scenes seen, visual text visible, and any face or celebrity detected. "
     videoScriptPrompt += "For voice, the same speaker number ALWAYS indicates the same person.\n"
@@ -262,13 +267,9 @@ export class VideoTable extends Component {
     if (video.chatLength <= this.maxCharactersForChat || video.chatSummary == ""){ 
       for (const i in video.chats){
         if (video.chats[i].actor == "You"){
-          if(video.chats.length == 1) {
-            chatPrompt += video.chats[i].text
-          }else{
-            chatPrompt += "\n\nHuman: " + video.chats[i].text
-          }
+          chatPrompt += "\nUser: " + video.chats[i].text
         }else{
-          chatPrompt += "\n\nAssistant: " + video.chats[i].text
+          chatPrompt += "\nYou: " + video.chats[i].text
         }
       }
     }else{ // If the chat history is too long, so that we include the summary of the chats + last chat only.
@@ -279,15 +280,18 @@ export class VideoTable extends Component {
       chatPrompt += "Answer the user's reply above directly, without any XML tag.\n"
     }
 
-    closingPrompt += "\n\nAssistant:"
-
-    const prompt = systemPrompt + videoScriptPrompt + chatPrompt + closingPrompt
+    const prompt = videoScriptPrompt + chatPrompt
 
     const input = { 
       body: JSON.stringify({
-        prompt: prompt,
+        anthropic_version: "bedrock-2023-05-31",    
+        system: systemPrompt,
+        messages: [
+            { role: "user", content: prompt},
+            { role: "assistant", content: "Here is my succinct answer:"}
+        ],
         temperature: 0.1,
-        max_tokens_to_sample: 1000,
+        max_tokens: 1000,
         stop_sequences: ["\nUser:"]
       }), 
       modelId: this.modelId, 
@@ -309,6 +313,11 @@ export class VideoTable extends Component {
     // For every video fragment, try to find the answer to the question, if and not found just write partial answer and go to next iteration.
     while(currentFragment <= numberOfFragments){
       var [videoScriptPrompt, chatPrompt, instructionPrompt, partialAnswerPrompt] = ["","","",""]
+
+      videoScriptPrompt += "To help you, here is the summary of the whole video that you previously wrote:\n"
+      videoScriptPrompt += `${video.summary}\n\n`
+      videoScriptPrompt += "Also, here are the entities and sentiment that you previously extracted. Each row is entity|sentiment|sentiment's reason:\n"
+      videoScriptPrompt += `${video.rawEntities}\n\n`
 
       // Construct the prompt containing the video script (the text representation of the current part of the video)
       videoScriptPrompt += "The video timeline has information about the voice heard in the video, visual scenes seen, visual texts visible, and any face or celebrity detected. "
@@ -361,14 +370,19 @@ export class VideoTable extends Component {
         instructionPrompt += "This partial answer will be included when we ask you again right after this by giving the video timeline for the next part, so that you can use the current partial answer.\n"
         instructionPrompt += `For question that needs you to see the whole video such as "is there any?", "does it have", "is it mentioned", DO NOT provide final answer until we give you all ${numberOfFragments} parts of the video timeline.\n`
       }
-      instructionPrompt += "\n\nAssistant:"
 
-      const prompt = systemPrompt + videoScriptPrompt + chatPrompt + partialAnswerPrompt + instructionPrompt
+      const prompt = videoScriptPrompt + chatPrompt + partialAnswerPrompt + instructionPrompt
       
       const input = { 
         body: JSON.stringify({
-          prompt: prompt,
-          max_tokens_to_sample: 1000,
+          anthropic_version: "bedrock-2023-05-31",    
+          system: systemPrompt,
+          messages: [
+              { role: "user", content: prompt},
+              { role: "assistant", content: "Here is my succinct answer:"}
+          ],
+          temperature: 0.1,
+          max_tokens: 1000,
           stop_sequences: ["\nUser:"]
         }), 
         modelId: this.modelId, 
@@ -376,7 +390,7 @@ export class VideoTable extends Component {
         accept: "application/json"
       };
       const response = await this.bedrockClient.send(new InvokeModelCommand(input)); 
-      rollingAnswer = JSON.parse(new TextDecoder().decode(response.body)).completion
+      rollingAnswer = JSON.parse(new TextDecoder().decode(response.body)).content[0].text
 
       // When the answer is found without having to go through all video fragments, then break and make it as a final answer.
       if (rollingAnswer.includes("|BREAK|")) {
@@ -398,7 +412,7 @@ export class VideoTable extends Component {
 
     this.addChatWaitingSpinner(video)
 
-    var systemPrompt = "\n\nHuman: You are an expert in analyzing video and you can answer questions about the video given the video timeline.\n"
+    var systemPrompt = "You are an expert in analyzing video and you can answer questions about the video given the video timeline.\n"
     systemPrompt += "Answer in the same language as the question from user.\n"
     systemPrompt += "If you do not know, say do not know. DO NOT make up wrong answers.\n" 
     systemPrompt += "The Human who asks can watch the video and they are not aware of the 'video timeline' which will be copied below. So, when answering, DO NOT indicate the presence of 'video timeline'. DO NOT quote raw information as is from the 'video timeline'\n"
@@ -411,11 +425,8 @@ export class VideoTable extends Component {
     systemPrompt += "Answer: It was mentioned at around 14 seconds mark that the narrator, Tom Bush, who is a business partner of XYZ, praises the XYZ company.\n"
     systemPrompt += "Question: Did Oba smile at the end of the video?\n"
     systemPrompt += "Answer: Yes he did.\n"
-    systemPrompt += "\n\n"
-    systemPrompt += "To help you, here is the summary of the whole video that you previously wrote:\n"
-    systemPrompt += `${video.summary}\n\n`
-    systemPrompt += "Also, here are the entities and sentiment that you previously extracted. Each row is entity|sentiment|sentiment's reason:\n"
-    systemPrompt += `${video.rawEntities}\n\n`
+    systemPrompt += "Question: When did he smile?\n"
+    systemPrompt += "Answer: He smiled at 5.5 and 7 second marks.\n"
 
     if(video.videoScript.length < this.maxCharactersForSingleLLMCall){
       await this.retrieveAnswerForShortVideo(video, systemPrompt) 
@@ -440,9 +451,11 @@ export class VideoTable extends Component {
     for await (const event of response.body) {
         if (event.chunk && event.chunk.bytes) {
             const chunk = JSON.parse(Buffer.from(event.chunk.bytes).toString("utf-8"));
-            video.chats[video.chats.length - 1].text += chunk.completion
-            video.chatLength += chunk.completion.length // Increment the length of the chat
-            this.setState({videos: this.state.videos})
+            if(chunk.type == "content_block_delta"){
+              video.chats[video.chats.length - 1].text += chunk.delta.text
+              video.chatLength += chunk.delta.text.length // Increment the length of the chat
+              this.setState({videos: this.state.videos})
+            }
         }
     };
   }
@@ -461,7 +474,8 @@ export class VideoTable extends Component {
     // If the chats between bot and human is roughly more than 5000 characters (1250 tokens) then summarize the chats, otherwise ignore and return.
     if (video.chatLength < this.maxCharactersForChat) return;
 
-    var prompt = "\n\nHuman: You are an expert in summarizing chat. The chat is between user and a bot. The bot answers questions about a video.\n"
+    var systemPrompt = "You are an expert in summarizing chat. The chat is between user and a bot. The bot answers questions about a video.\n"
+    var prompt = ""
 
     if (video.chatSummary == ""){
       prompt += "Find the chat below.\n<Chat>\n"
@@ -480,12 +494,17 @@ export class VideoTable extends Component {
       prompt += `<Reply>\n${video.chats[video.chats.length - 1].text}\n</Reply>\n`
       prompt += "Summarize the whole chat including your newest reply in no longer than 1 page."
     }
-    prompt += "\n\nAssistant:"
 
     const input = { 
       body: JSON.stringify({
-        prompt: prompt,
-        max_tokens_to_sample: Math.round(this.maxCharactersForChat/this.estimatedCharactersPerToken),
+        anthropic_version: "bedrock-2023-05-31",    
+        system: systemPrompt,
+        messages: [
+            { role: "user", content: prompt},
+            { role: "assistant", content: "Here is my succinct answer:"}
+        ],
+        temperature: 0.1,
+        max_tokens: Math.round(this.maxCharactersForChat/this.estimatedCharactersPerToken),
         stop_sequences: ["\nUser:", "\nYou:"]
       }), 
       modelId: this.modelId, 
@@ -493,7 +512,7 @@ export class VideoTable extends Component {
       accept: "application/json"
     };
     const response = await this.bedrockClient.send(new InvokeModelCommand(input));
-    video.chatSummary = JSON.parse(new TextDecoder().decode(response.body)).completion
+    video.chatSummary = JSON.parse(new TextDecoder().decode(response.body)).content[0].text
     this.setState({videos: this.state.videos})
   }
 

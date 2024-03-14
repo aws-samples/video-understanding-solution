@@ -16,4 +16,3 @@ export default {
     "rest_api_url": "PLACEHOLDER_REST_API_URL",
     "videos_api_resource": "PLACEHOLDER_VIDEOS_API_RESOURCE"
 }
-

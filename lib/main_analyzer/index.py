@@ -874,7 +874,7 @@ class VideoAnalyzer(ABC):
                     "Your answer should include entities found from previous part/s as well. DO NOT duplicate entities.\n" \
                     "</Task>\n\n"
                     
-                    chunk_sentiment = self.call_llm(system_prompt, prompt, prefilled_response, temperature=0.1, stop_sequences=["<Task>"])
+                    chunk_sentiment = self.call_llm(system_prompt, prompt, prefilled_response, temperature=0.01, stop_sequences=["<Task>"])
                     self.video_rolling_sentiment = chunk_sentiment
                 elif is_first_chunk:
                     prompt = f"The video has {number_of_chunks} parts. The below Video Timeline is only for the first part.\n\n" \
@@ -898,7 +898,7 @@ class VideoAnalyzer(ABC):
                     "I know you need all parts of the video to come with the entity list. Therefore, for now you only need to give an INTERMEDIATE results by listing the entities you have in this first part of the video.\n" \
                     "</Task>\n\n"
                     
-                    chunk_sentiment = self.call_llm(system_prompt, prompt, prefilled_response, temperature=0.8, stop_sequences=["<Task>"])
+                    chunk_sentiment = self.call_llm(system_prompt, prompt, prefilled_response, temperature=0.01, stop_sequences=["<Task>"])
                     self.video_rolling_sentiment = chunk_sentiment
                 else:
                     prompt = f"The video has {number_of_chunks} parts. The below Video Timeline is only for part {chunk_number+1} of the video.\n\n" \
@@ -924,7 +924,7 @@ class VideoAnalyzer(ABC):
                     "I know you need all parts of the video to come with the entity list. Therefore, for now you only need to give an INTERMEDIATE results by listing the entities you have so far. DO NOT duplicate entities.\n" \
                     "</Task>\n\n"
                     
-                    chunk_sentiment = self.call_llm(system_prompt, prompt, prefilled_response, temperature=0.8, stop_sequences=["<Task>"])
+                    chunk_sentiment = self.call_llm(system_prompt, prompt, prefilled_response, temperature=0.01, stop_sequences=["<Task>"])
                     self.video_rolling_sentiment = chunk_sentiment
                 
         return self.video_rolling_sentiment
@@ -1094,7 +1094,7 @@ class VideoAnalyzerBedrock(VideoAnalyzer):
         call_done = False
         while(not call_done):
             try:
-                bedrock_response = self.bedrock_client.invoke_model(body=encoded_input, modelId=self.vmodel_name)
+                bedrock_response = self.bedrock_client.invoke_model(body=encoded_input, modelId=self.model_name)
                 call_done = True
             except self.bedrock_client.exceptions.ThrottlingException as e:
                 print("Amazon Bedrock throttling exception")
@@ -1116,7 +1116,7 @@ class VideoAnalyzerBedrock(VideoAnalyzer):
             try:
                 response = self.bedrock_client.invoke_model(body=body, modelId=self.embedding_model_name)
                 call_done = True
-            except ThrottlingException:
+            except self.bedrock_client.exceptions.ThrottlingException:
                 print("Amazon Bedrock throttling exception")
                 time.sleep(60)
             except Exception as e:
