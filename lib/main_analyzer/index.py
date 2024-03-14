@@ -212,11 +212,12 @@ class VideoPreprocessor(ABC):
             get_transcription = self.transcribe_client.get_transcription_job(TranscriptionJobName=self.transcription_job_name)
     
     def extract_visual_objects(self, get_object_detection_result: dict):
+        person_timestamps_seconds: list(int) = []
         label: dict
         for label in get_object_detection_result['Labels']:
             objects_at_this_timestamp: list = []
             timestamp_millis: int = int(label['Timestamp'])
-            timestamp_second: float = timestamp_millis/1000
+            timestamp_second: int = round(timestamp_millis/1000, 1)
 
             # If this timestamp millis is already in self.visual_objects dictionary, then use it and append. Otherwise, add a new key to the dict.
             if timestamp_millis in self.visual_objects:
@@ -228,8 +229,9 @@ class VideoPreprocessor(ABC):
             confidence: float = label['Label']['Confidence']
 
             # If this is a Person object, then register this into the timestamp list for face detection.
-            if object_name == "Person":
+            if object_name == "Person" and confidence >= FaceFinding.face_detection_confidence_threshold:
                 self.person_timestamps_millis.append(timestamp_millis)
+                person_timestamps_seconds.append(timestamp_second)
             
             if object_name == "Text":
                 self.text_timestamps_millis.append(timestamp_millis)
@@ -353,8 +355,10 @@ class VideoPreprocessor(ABC):
             raise Exception("detect_faces_and_celebrities is called before the video is loaded")
 
         video = self.video
+
+        timestamp_millis_list = (list(range(0, self.video_duration_millis, self.frame_interval)) + self.text_timestamps_millis)
         timestamp_millis: int
-        for timestamp_millis in (list(range(0, self.video_duration_millis, self.frame_interval)) + self.text_timestamps_millis):
+        for timestamp_millis in timestamp_millis_list:
             video.set(cv2.CAP_PROP_POS_MSEC, int(timestamp_millis))
             success, frame = video.read()
             # Resize frame to 512 x 512 px
@@ -373,7 +377,7 @@ class VideoPreprocessor(ABC):
             image = io_stream.getvalue()
             self.frame_bytes.append([timestamp_millis, image])
 
-    def _what_is_inside_this_frame(self, system_prompt, frame_info):
+    def extract_scene_from_vqa(self, frame_info: list[Union[int, bytes]]):
         timestamp_millis = frame_info[0]
         image = frame_info[1]
 
@@ -400,9 +404,8 @@ class VideoPreprocessor(ABC):
         timestamp_millis: int
         image: bytes
           
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            executor.map(self._what_is_inside_this_frame, self.frame_bytes)
-
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            executor.map(self.extract_scene_from_vqa, self.frame_bytes)
     
     def wait_for_dependencies(self):
         self.wait_for_rekognition_label_detection(sort_by="TIMESTAMP")
@@ -466,7 +469,7 @@ class VideoPreprocessorBedrockVQA(VideoPreprocessor):
             try:
                 bedrock_response = self.bedrock_client.invoke_model(body=encoded_input, modelId=self.vqa_model_name)
                 call_done = True
-            except bedrock.exceptions.ThrottlingException as e:
+            except self.bedrock_client.exceptions.ThrottlingException as e:
                 print("Amazon Bedrock throttling exception")
                 time.sleep(60)
             except Exception as e:
@@ -552,7 +555,7 @@ class VideoAnalyzer(ABC):
         video_name = Column(ForeignKey(f"{video_table_name}.name"), nullable=False)
   
     @abstractmethod
-    def call_llm(self, prompt):
+    def call_llm(self, system_prompt, prompt, prefilled_response):
         pass
     
     @abstractmethod
@@ -606,7 +609,7 @@ class VideoAnalyzer(ABC):
         for item in self.original_transcript["results"]["items"]:
             if item['type'] == 'punctuation':
                 current_millis = previous_millis + 1 # Just add 1 millisecond to avoid this punctuation replaces the previous word.
-                transcript[curent_millis] = item['alternatives'][0]['content']
+                transcript[current_millis] = item['alternatives'][0]['content']
             else:
                 try:
                     time_millis: int = int(float(item['start_time'])*1000) # In millisecond
@@ -617,7 +620,7 @@ class VideoAnalyzer(ABC):
                         speaker_number = int(match.group(1)) + 1 # So that it starts from 1, not 0
                         content += f" Speaker {speaker_number} "
                     if "language_code" in item:
-                        content += f"in language {item['language_code']}"
+                        content += f"in {item['language_code']}"
 
                     content += f": {item['alternatives'][0]['content']}"
 
@@ -681,16 +684,18 @@ class VideoAnalyzer(ABC):
         self.all_combined_video_script += combined_video_script
   
     def generate_summary(self):
-        prompt_prefix = "You are an expert video analyst who reads a Video Timeline and creates summary of the video.\n" \
+        system_prompt = "You are an expert video analyst who reads a Video Timeline and creates summary of the video.\n" \
                         "The Video Timeline is a text representation of a video.\n" \
-                        "The Video Timeline contains the visual scenes, the visual texts, and human voice in the video.\n" \
-                        "Visual scenes (scene) represents what objects are visible in the video at that second. This can be the objects seen in camera, or objects from a screen sharing, or any other visual scenarios. You can infer how the visualization look like, so long as you are confident.\n" \
+                        "The Video Timeline contains the visual scenes, the visual texts, human voice, celebrities, and human faces in the video.\n" \
+                        "Visual objects (objects) represents what objects are visible in the video at that second. This can be the objects seen in camera, or objects from a screen sharing, or any other visual scenarios.\n" \
+                        "Visual scenes (scene) represents the description of how the video frame look like at that second.\n" \
                         "Visual texts (text) are the text visible in the video. It can be texts in real world objects as recorded in video camera, or those from screen sharing, or those from presentation recording, or those from news, movies, or others. \n" \
                         "Human voice (voice) is the transcription of the video.\n" \
                         "Celebrities (celebrity) provides information about the celebrity detected in the video at that second. It may have the information on whether the celebrity is smiling and the captured emotions. It may also has information on where the face is located relative to the video frame size. The celebrity may not be speaking as he/she may just be portrayed. \n" \
                         "Human faces (face) lists the face seen in the video at that second. This may have information on the emotions, face location relative to the video frame, and more facial features. \n"
 
         video_script_length = len(self.combined_video_script)
+        prefilled_response = "Here is the summary of the video:"
 
         # When the video is short enough to fit into 1 chunk
         if video_script_length <= self.video_script_chunk_size_for_summary_generation:
@@ -700,17 +705,14 @@ class VideoAnalyzer(ABC):
                             f"{self.combined_video_script}\n" \
                             "</Video Timeline>\n"
           
-            prompt = f"{prompt_prefix}\n\n" \
-            f"{core_prompt}\n\n" \
+            prompt = f"{core_prompt}\n\n" \
             "<Task>\n" \
             "Describe the summary of the video in paragraph format.\n" \
             "You can make reasonable extrapolation of the actual video given the Video Timeline.\n" \
             "DO NOT mention 'Video Timeline' or 'video timeline'.\n" \
-            "Give the summary directly without any other sentence.\n" \
-            "</Task>\n" \
-            "Summary:\n"
-          
-            self.video_rolling_summary = self.call_llm(prompt, stop_sequences=["<Task>"])
+            "</Task>\n\n"
+
+            self.video_rolling_summary = self.call_llm(system_prompt, prompt, prefilled_response, stop_sequences=["<Task>"])
         # When the video is long enough to be divided into multiple chunks to fit within LLM's context length
         else:
             number_of_chunks = math.ceil( (video_script_length + 1) / (self.video_script_chunk_size_for_summary_generation - self.video_script_chunk_overlap_for_summary_generation) )
@@ -737,8 +739,7 @@ class VideoAnalyzer(ABC):
                         "</Video Timeline>\n"
                 
                 if is_last_chunk:
-                    prompt = f"{prompt_prefix}\n\n" \
-                    f"The video has {number_of_chunks} parts.\n\n" \
+                    prompt = f"The video has {number_of_chunks} parts.\n\n" \
                     f"The below Video Timeline is only for the part {chunk_number+1} of the video, which is the LAST part.\n\n" \
                     f"{core_prompt}\n\n" \
                     "Below is the summary of all previous part/s of the video:\n\n" \
@@ -748,28 +749,24 @@ class VideoAnalyzer(ABC):
                     "You can make reasonable extrapolation of the actual video given the Video Timeline.\n" \
                     "DO NOT mention 'Video Timeline' or 'video timeline'.\n" \
                     "Give the summary directly without any other sentence.\n" \
-                    "</Task>\n" \
-                    "Summary:\n"
+                    "</Task>\n\n"
                     
-                    chunk_summary = self.call_llm(prompt, stop_sequences=["<Task>"])
+                    chunk_summary = self.call_llm(system_prompt, prompt, prefilled_response, stop_sequences=["<Task>"])
                     self.video_rolling_summary = chunk_summary
                 elif is_first_chunk:
-                    prompt = f"{prompt_prefix}\n\n" \
-                    f"The video has {number_of_chunks} parts. The below Video Timeline is only for the first part.\n\n" \
+                    prompt = f"The video has {number_of_chunks} parts. The below Video Timeline is only for the first part.\n\n" \
                     f"{core_prompt}\n\n" \
                     "<Task>\n" \
                     "Describe the summary of the first part of the video in paragraph format.\n" \
                     "You can make reasonable extrapolation of the actual video given the Video Timeline.\n" \
                     "DO NOT mention 'Video Timeline' or 'video timeline'.\n" \
                     "Give the summary directly without any other sentence.\n" \
-                    "</Task>\n" \
-                    "Summary:\n"
+                    "</Task>\n\n"
                     
-                    chunk_summary = self.call_llm(prompt, stop_sequences=["<Task>"])
+                    chunk_summary = self.call_llm(system_prompt, prompt, prefilled_response, stop_sequences=["<Task>"])
                     self.video_rolling_summary = chunk_summary
                 else:
-                    prompt = f"{prompt_prefix}\n\n" \
-                    f"The video has {number_of_chunks} parts.\n\n" \
+                    prompt = f"The video has {number_of_chunks} parts.\n\n" \
                     f"The below Video Timeline is only for part {chunk_number+1} of the video.\n\n" \
                     f"{core_prompt}\n\n" \
                     "Below is the summary of all previous part/s of the video:\n\n" \
@@ -780,26 +777,27 @@ class VideoAnalyzer(ABC):
                     "You can make reasonable extrapolation of the actual video given the Video Timeline.\n" \
                     "DO NOT mention 'Video Timeline' or 'video timeline'.\n" \
                     "Give the summary directly without any other sentence.\n" \
-                    "</Task>\n" \
-                    "Summary:\n"
+                    "</Task>\n\n"
                     
-                    chunk_summary = self.call_llm(prompt, stop_sequences=["<Task>"])
+                    chunk_summary = self.call_llm(system_prompt, prompt, prefilled_response, stop_sequences=["<Task>"])
                     self.video_rolling_summary = chunk_summary
 
         return self.video_rolling_summary
     
     def extract_sentiment(self):
-        prompt_prefix = "You are an expert video analyst who reads a Video Timeline and extract entities and their associated sentiment.\n" \
+        system_prompt = "You are an expert video analyst who reads a Video Timeline and extract entities and their associated sentiment.\n" \
                         "The Video Timeline is a text representation of a video.\n" \
-                        "The Video Timeline contains the visual scenes, the visual texts, and human voice in the video.\n" \
-                        "Visual scenes (scene) represents what objects are visible in the video at that second. This can be the objects seen in camera, or objects from a screen sharing, or any other visual scenarios. You can infer how the visualization look like, so long as you are confident.\n" \
+                        "The Video Timeline contains the visual scenes, the visual objects, visual texts, human voice, celebrities, and human faces in the video.\n" \
+                        "Visual objects (objects) represents what objects are visible in the video at that second. This can be the objects seen in camera, or objects from a screen sharing, or any other visual scenarios.\n" \
+                        "Visual scenes (scene) represents the description of how the video frame look like at that second.\n" \
                         "Visual texts (text) are the text visible in the video. It can be texts in real world objects as recorded in video camera, or those from screen sharing, or those from presentation recording, or those from news, movies, or others. \n" \
                         "Human voice (voice) is the transcription of the video.\n" \
                         "Celebrities (celebrity) provides information about the celebrity detected in the video at that second. It may have the information on whether the celebrity is smiling and the captured emotions. It may also has information on where the face is located relative to the video frame size. The celebrity may not be speaking as he/she may just be portrayed. \n" \
                         "Human faces (face) lists the face seen in the video at that second. This may have information on the emotions, face location relative to the video frame, and more facial features. \n"
                         
-        
         video_script_length = len(self.combined_video_script)
+
+        prefilled_response = "Here are the entities I extracted:"
 
         # When the video is short enough to fit into 1 chunk
         if video_script_length <= self.video_script_chunk_size_for_entities_extraction:
@@ -809,8 +807,7 @@ class VideoAnalyzer(ABC):
                             f"{self.combined_video_script}\n" \
                             "</Video Timeline>\n"
           
-            prompt = f"{prompt_prefix}\n\n" \
-            f"{core_prompt}\n\n" \
+            prompt = f"{core_prompt}\n\n" \
             f"To help you, here is the summary of the whole video.\n\n{self.video_rolling_summary}\n\n" \
             "<Task>\n" \
             "Now your job is to infer and list the entities, their sentiment [positive, negative, mixed, neutral], and the sentiment's reason.\n" \
@@ -827,10 +824,9 @@ class VideoAnalyzer(ABC):
             "extracurricular activities|neutral|N/A.\n" \
             "examination|mixed|While the interviewee dreads examination, he likes the challenge of it.\n\n" \
             "STRICTLY FOLLOW the format above. DO NOT mention Video Timeline or video timeline.\n" \
-            "</Task>\n" \
-            "Entities:\n"
+            "</Task>\n\n"
           
-            self.video_rolling_sentiment = self.call_llm(prompt, temperature=0.1, stop_sequences=["<Task>"])
+            self.video_rolling_sentiment = self.call_llm(system_prompt, prompt, prefilled_response, temperature=0.1, stop_sequences=["<Task>"])
         else:
             number_of_chunks = math.ceil( (video_script_length + 1) / (self.video_script_chunk_size_for_entities_extraction - self.video_script_chunk_overlap_for_entities_extraction) )
             
@@ -855,8 +851,7 @@ class VideoAnalyzer(ABC):
                         "</Video Timeline>\n"
                 
                 if is_last_chunk:
-                    prompt = f"{prompt_prefix}\n\n" \
-                    f"The video has {number_of_chunks} parts. The below Video Timeline is only for part {chunk_number+1} of the video, which is the LAST part.\n\n" \
+                    prompt = f"The video has {number_of_chunks} parts. The below Video Timeline is only for part {chunk_number+1} of the video, which is the LAST part.\n\n" \
                     f"{core_prompt}\n\n" \
                     "Below are the entities, sentiment, and reason you extracted from the previous part/s of the video.\n\n" \
                     f"Entities:\n{self.video_rolling_sentiment}\n\n" \
@@ -877,14 +872,12 @@ class VideoAnalyzer(ABC):
                     "examination|mixed|While the interviewee dreads examination, he likes the challenge of it.\n\n" \
                     "STRICTLY FOLLOW the format above. DO NOT mention Video Timeline or video timeline.\n" \
                     "Your answer should include entities found from previous part/s as well. DO NOT duplicate entities.\n" \
-                    "</Task>\n" \
-                    "Entities:\n"
+                    "</Task>\n\n"
                     
-                    chunk_sentiment = self.call_llm(prompt, temperature=0.1, stop_sequences=["<Task>"])
+                    chunk_sentiment = self.call_llm(system_prompt, prompt, prefilled_response, temperature=0.1, stop_sequences=["<Task>"])
                     self.video_rolling_sentiment = chunk_sentiment
                 elif is_first_chunk:
-                    prompt = f"{prompt_prefix}\n\n" \
-                    f"The video has {number_of_chunks} parts. The below Video Timeline is only for the first part.\n\n" \
+                    prompt = f"The video has {number_of_chunks} parts. The below Video Timeline is only for the first part.\n\n" \
                     f"{core_prompt}\n\n" \
                     f"To help you, here is the summary of the whole video.\n\n{self.video_rolling_summary}\n\n" \
                     "<Task>\n" \
@@ -903,14 +896,12 @@ class VideoAnalyzer(ABC):
                     "examination|mixed|While the interviewee dreads examination, he likes the challenge of it.\n\n" \
                     "STRICTLY FOLLOW the format above. DO NOT mention Video Timeline or video timeline.\n" \
                     "I know you need all parts of the video to come with the entity list. Therefore, for now you only need to give an INTERMEDIATE results by listing the entities you have in this first part of the video.\n" \
-                    "</Task>\n" \
-                    "Entities:\n"
+                    "</Task>\n\n"
                     
-                    chunk_sentiment = self.call_llm(prompt, temperature=0.8, stop_sequences=["<Task>"])
+                    chunk_sentiment = self.call_llm(system_prompt, prompt, prefilled_response, temperature=0.8, stop_sequences=["<Task>"])
                     self.video_rolling_sentiment = chunk_sentiment
                 else:
-                    prompt = f"{prompt_prefix}\n\n" \
-                    f"The video has {number_of_chunks} parts. The below Video Timeline is only for part {chunk_number+1} of the video.\n\n" \
+                    prompt = f"The video has {number_of_chunks} parts. The below Video Timeline is only for part {chunk_number+1} of the video.\n\n" \
                     f"{core_prompt}\n\n" \
                     "Below are the entities, sentiment, and reason you extracted from the previous part/s of the video.\n\n" \
                     f"Entities:\n{self.video_rolling_sentiment}\n\n" \
@@ -931,10 +922,9 @@ class VideoAnalyzer(ABC):
                     "examination|mixed|While the interviewee dreads examination, he likes the challenge of it.\n\n" \
                     "STRICTLY FOLLOW the format above. DO NOT mention Video Timeline or video timeline.\n" \
                     "I know you need all parts of the video to come with the entity list. Therefore, for now you only need to give an INTERMEDIATE results by listing the entities you have so far. DO NOT duplicate entities.\n" \
-                    "</Task>\n" \
-                    "Entities:\n"
+                    "</Task>\n\n"
                     
-                    chunk_sentiment = self.call_llm(prompt, temperature=0.8, stop_sequences=["<Task>"])
+                    chunk_sentiment = self.call_llm(system_prompt, prompt, prefilled_response, temperature=0.8, stop_sequences=["<Task>"])
                     self.video_rolling_sentiment = chunk_sentiment
                 
         return self.video_rolling_sentiment
@@ -1077,35 +1067,42 @@ class VideoAnalyzerBedrock(VideoAnalyzer):
         self.model_name = model_name
         self.embedding_model_name = embedding_model_name
         self.llm_parameters = {
+            "anthropic_version": "bedrock-2023-05-31",    
+            "max_tokens": 2000,
             "temperature": 0.7,
             "top_k": 10,
-            "max_tokens_to_sample": 2000,
-            "stop_sequences": ["\n\nHuman:"]
+            "stop_sequences": []
         }
-  
-    def call_llm(self, prompt, temperature=None, top_k=None, stop_sequences=[]):
-        self.llm_parameters['prompt'] = f"\n\nHuman:{prompt}\n\nAssistant:"
+    
+    def call_llm(self, system_prompt: str, prompt: str, prefilled_response: str, temperature=None, top_k=None, stop_sequences=[]) -> str:
+        self.llm_parameters["system"] = system_prompt
+        self.llm_parameters["messages"] = [
+            {
+                "role": "user",
+                "content":  prompt
+            },
+            { "role": "assistant", "content": prefilled_response},
+        ]
         if temperature is not None:
             self.llm_parameters['temperature'] = temperature
         if top_k is not None:
             self.llm_parameters['top_k'] = top_k
         if stop_sequences is not None:
             self.llm_parameters['stop_sequences'] += stop_sequences
-
-        input_str = json.dumps(self.llm_parameters)
-        encoded_input = input_str.encode("utf-8")
+        
+        encoded_input = json.dumps(self.llm_parameters).encode("utf-8")
         call_done = False
         while(not call_done):
             try:
-                bedrock_response = self.bedrock_client.invoke_model(body=encoded_input, modelId=self.model_name)
+                bedrock_response = self.bedrock_client.invoke_model(body=encoded_input, modelId=self.vmodel_name)
                 call_done = True
-            except bedrock.exceptions.ThrottlingException as e:
+            except self.bedrock_client.exceptions.ThrottlingException as e:
                 print("Amazon Bedrock throttling exception")
                 time.sleep(60)
             except Exception as e:
                 raise e
 
-        response = json.loads(bedrock_response.get("body").read())["completion"]
+        response: str = json.loads(bedrock_response.get("body").read())["content"][0]["text"]
         return response
     
     def call_embedding_llm(self, document):

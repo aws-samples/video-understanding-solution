@@ -29,8 +29,8 @@ from aws_cdk.aws_ecr_assets import DockerImageAsset
 from cdk_nag import AwsSolutionsChecks, NagSuppressions
 
 
-model_id = "anthropic.claude-v2:1"
-vqa_model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
+model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
+vqa_model_id = "anthropic.claude-3-haiku-20240307-v1:0"
 frame_interval = "1000" # milliseconds
 chat_model_id = "anthropic.claude-instant-v1"
 embedding_model_id = "cohere.embed-multilingual-v3"
@@ -583,8 +583,8 @@ class VideoUnderstandingSolutionStack(Stack):
 
         # Task definition for main analyzer
         analyzer_task_definition = _ecs.FargateTaskDefinition(self, "TaskDefinition",
-            cpu=512,
-            memory_limit_mib=1024,
+            cpu=1024,
+            memory_limit_mib=2048,
             task_role= main_analyzer_role,
             execution_role= main_analyzer_execution_role
         )
