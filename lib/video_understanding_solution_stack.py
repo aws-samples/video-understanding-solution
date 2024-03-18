@@ -230,8 +230,12 @@ class VideoUnderstandingSolutionStack(Stack):
           vpc=vpc,
           subnet_group=db_subnet_group,
           storage_encrypted=True,
-          deletion_protection=True,
+          deletion_protection=False,
         )
+
+        NagSuppressions.add_resource_suppressions(aurora_cluster, [
+            { "id": 'AwsSolutions-RDS10', "reason": 'Allow deletion_protection to be disable'},
+        ], True)
         
         self.db_writer_endpoint = aurora_cluster.cluster_endpoint
         self.db_reader_endpoint = aurora_cluster.cluster_read_endpoint
@@ -251,6 +255,7 @@ class VideoUnderstandingSolutionStack(Stack):
                   ],
                 )
             ),
+            # architecture = _lambda.Architecture.ARM_64,
             environment = {
                 'DB_WRITER_ENDPOINT': self.db_writer_endpoint.hostname,
                 'DATABASE_NAME': database_name,
@@ -599,7 +604,7 @@ class VideoUnderstandingSolutionStack(Stack):
             image=_ecs.ContainerImage.from_docker_image_asset(
                 DockerImageAsset(self, "AnalyzerImageBuild",
                     directory=f"{BASE_DIR}/lib/main_analyzer/"
-                )
+                ),
             ),
             memory_limit_mib=512,
             logging=_ecs.LogDrivers.aws_logs(
