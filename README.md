@@ -4,7 +4,28 @@
 
 This is a deployable solution to help save your time in understanding videos without having to watch every video. You can upload videos and this solution can generate AI-powered summary and entities extraction for each video. It also supports Q&A about the video like "What is funny about the video?", "How does Jeff Bezos look like there?", and "What shirt did he wear?". You can also search for videos using semantic search e.g. "Amazon's culture and history". This solution extracts information from visual scenes, audio, visible texts, and detected celebrities or faces in the video. It leverages an LLM which can understand visual and describe the video frames.
 
-You can upload videos to your Amazon Simple Storage Service (S3) bucket bucket by using AWS console, CLI, SDK, or other means (e.g. via AWS Transfer Family). This solution will automatically trigger processes including call to Amazon Transcribe for voice transcription, call to Amazon Rekognition to extract the objects visible, and call to Amazon Bedrock with Claude 3 model to extract scenes and visually visible text. The LLM used can perform VQA (visual question answering) from images (video frames), which is used to extract the scene and text. This combined information is used to generate the summary and entities extraction as powered by generative AI with Amazon Bedrock. The UI chatbot also uses Amazon Bedrock for the Q&A chatbot. The summaries, entities, and combined extracted information are stored in S3 bucket, available to be used for further custom analytics. Refer to the diagram below on the architecture.
+You can upload videos to your Amazon Simple Storage Service (S3) bucket bucket by using AWS console, CLI, SDK, or other means (e.g. via AWS Transfer Family). This solution will automatically trigger processes including call to Amazon Transcribe for voice transcription, call to Amazon Rekognition to extract the objects visible, and call to Amazon Bedrock with Claude 3 model to extract scenes and visually visible text. The LLM used can perform VQA (visual question answering) from images (video frames), which is used to extract the scene and text. This combined information is used to generate the summary and entities extraction as powered by generative AI with Amazon Bedrock. The UI chatbot also uses Amazon Bedrock for the Q&A chatbot. The summaries, entities, and combined extracted information are stored in S3 bucket, available to be used for further custom analytics. 
+
+Demo for summarization feature:
+
+![Summarization](./assets/vus-summary.gif)
+
+Demo for entities and sentiment extraction feature:
+
+![Entities](./assets/vus-entities.gif)
+
+Demo for Q&A feature:
+
+![Chat 1](./assets/vus-chat-1.gif)
+![Chat 2](./assets/vus-chat-2.gif)
+![Chat 3](./assets/vus-chat-3.gif)
+
+Demo for search feature:
+
+![Search](./assets/vus-search.gif)
+
+
+The diagram below shows the architecture. This is extendable since the summaries, entities, and extracted information are stored in Amazon S3 bucket, which you can use for further purposes. 
 
 ![Architecture](./assets/architecture.jpg)
 
@@ -108,6 +129,21 @@ To remove the solution from your AWS account, follow these steps:
 Run `make scan` before submitting any pull request to make sure that the introduced changes do not open a vulnerability. Make sure the generated banditreport.txt, semgrepreport.txt, semgreplog.txt, npmauditreport.txt, and the cdk_nag files in cdk.out folders all show **no high or critical finding**.
 
 See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
+
+## Extendability and customization
+This solution is architected to be extendable and customizable. 
+
+### Extending the solution for other purposes
+1. The audio transcript, the combined visual and audio information extracted from LLM (with VQA) and AWS services, the summaries, and the extracted entities and sentiment are stored in S3 bucket. Navigate to the S3 bucket and find the relevant folders there. The file name for each of those category is based on the actual file name from the 'source' folder. You can further use this information for other purposes
+
+2. The summaries, the combined visual and audio information extracted from LLM (with VQA) and AWS services, and the extracted entities and sentiment are stored in the Amazon Aurora Serverless v2 PostgreSQL database in addition to S3. The summaries and the combined extracted information are stored in the form of text and embedding (using pgVector). These are under "videos" database name. The summaries are stored in "videos" table. The entities are stored in "entities" table. The extracted information of the video (arranged in timestamps basis and may stored in chunks) is stored in "content" table. You can use the database with credentials from the AWS Secrets Manager.
+
+### Customizing the solution
+To customize the solution, you can edit the code. Please refer to the Development section below. The possible customizations include:
+1. Modifying prompts to add more data to be extracted from the video frames
+2. Modifying prompts to add more features
+3. Modifying the backend code
+4. Modiyfing the UI
 
 ## Development
 
