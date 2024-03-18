@@ -491,13 +491,16 @@ class VideoAnalyzer(ABC):
         faces: dict[int, list[str]],
         summary_folder: str,
         entity_sentiment_folder: str,
-        video_script_folder: str
+        video_script_folder: str,
+        transcription_job_name: str,
         ):
 
         self.s3_client = boto3.client("s3")
+        self.transcribe_client = boto3.client("transcribe")
         self.bucket_name: str = bucket_name
         self.summary_folder: str = summary_folder
         self.entity_sentiment_folder: str = entity_sentiment_folder
+        self.transcription_job_name: str = transcription_job_name
         self.video_script_folder: str = video_script_folder
         self.video_name: str = video_name
         self.video_path: str = video_path
@@ -683,6 +686,18 @@ class VideoAnalyzer(ABC):
         self.combined_video_script = combined_video_script
         self.all_combined_video_script += combined_video_script
   
+    def get_language_code(self):
+        get_transcription = self.transcribe_client.get_transcription_job(TranscriptionJobName=self.transcription_job_name)
+        return get_transcription["TranscriptionJob"]["LanguageCodes"][0]["LanguageCode"]
+
+    def prompt_translate(self):
+        language_code = self.get_language_code()
+
+        if language_code == "en-US":
+            return f"You are a native speaker of {language_code} and your answer must be {language_code}"
+        else:
+            return f"You are a native speaker of {language_code} and your answer must be {language_code}, not en-US"
+
     def generate_summary(self):
         system_prompt = "You are an expert video analyst who reads a Video Timeline and creates summary of the video.\n" \
                         "The Video Timeline is a text representation of a video.\n" \
@@ -692,7 +707,8 @@ class VideoAnalyzer(ABC):
                         "Visual texts (text) are the text visible in the video. It can be texts in real world objects as recorded in video camera, or those from screen sharing, or those from presentation recording, or those from news, movies, or others. \n" \
                         "Human voice (voice) is the transcription of the video.\n" \
                         "Celebrities (celebrity) provides information about the celebrity detected in the video at that second. It may have the information on whether the celebrity is smiling and the captured emotions. It may also has information on where the face is located relative to the video frame size. The celebrity may not be speaking as he/she may just be portrayed. \n" \
-                        "Human faces (face) lists the face seen in the video at that second. This may have information on the emotions, face location relative to the video frame, and more facial features. \n"
+                        "Human faces (face) lists the face seen in the video at that second. This may have information on the emotions, face location relative to the video frame, and more facial features. \n" \
+                        f"{self.prompt_translate()}\n"
 
         video_script_length = len(self.combined_video_script)
         prefilled_response = "Here is the summary of the video:"
@@ -1057,9 +1073,10 @@ class VideoAnalyzerBedrock(VideoAnalyzer):
         faces: dict[int, list[str]],
         summary_folder: str,
         entity_sentiment_folder: str,
-        video_script_folder: str
+        video_script_folder: str,
+        transcription_job_name: str
         ):
-        super().__init__(bucket_name, video_name, video_path, visual_objects, visual_scenes, visual_texts, transcript, celebrities, faces,summary_folder, entity_sentiment_folder, video_script_folder)
+        super().__init__(bucket_name, video_name, video_path, visual_objects, visual_scenes, visual_texts, transcript, celebrities, faces,summary_folder, entity_sentiment_folder, video_script_folder, transcription_job_name)
         
         config = Config(read_timeout=1000) # Extends botocore read timeout to 1000 seconds
         self.bedrock_client = boto3.client(service_name="bedrock-runtime", config=config)
@@ -1164,7 +1181,8 @@ def handler():
             faces=faces,
             summary_folder=summary_folder,
             entity_sentiment_folder=entity_sentiment_folder,
-            video_script_folder=video_script_folder
+            video_script_folder=video_script_folder,
+            transcription_job_name=transcription_job_name
         )
         # Run video analysis
         video_analyzer.run()
