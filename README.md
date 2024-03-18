@@ -6,21 +6,21 @@ This is a deployable solution to help save your time in understanding videos wit
 
 You can upload videos to your Amazon Simple Storage Service (S3) bucket bucket by using AWS console, CLI, SDK, or other means (e.g. via AWS Transfer Family). This solution will automatically trigger processes including call to Amazon Transcribe for voice transcription, call to Amazon Rekognition to extract the objects visible, and call to Amazon Bedrock with Claude 3 model to extract scenes and visually visible text. The LLM used can perform VQA (visual question answering) from images (video frames), which is used to extract the scene and text. This combined information is used to generate the summary and entities extraction as powered by generative AI with Amazon Bedrock. The UI chatbot also uses Amazon Bedrock for the Q&A chatbot. The summaries, entities, and combined extracted information are stored in S3 bucket, available to be used for further custom analytics. 
 
-Demo for summarization feature:
+**Demo for summarization feature:**
 
 ![Summarization](./assets/vus-summary.gif)
 
-Demo for entities and sentiment extraction feature:
+**Demo for entities and sentiment extraction feature:**
 
 ![Entities](./assets/vus-entities.gif)
 
-Demo for Q&A feature:
+**Demo for Q&A feature:**
 
 ![Chat 1](./assets/vus-chat-1.gif)
 ![Chat 2](./assets/vus-chat-2.gif)
 ![Chat 3](./assets/vus-chat-3.gif)
 
-Demo for search feature:
+**Demo for search feature:**
 
 ![Search](./assets/vus-search.gif)
 
