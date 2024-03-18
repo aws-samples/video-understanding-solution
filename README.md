@@ -14,10 +14,16 @@ You can upload videos to your Amazon Simple Storage Service (S3) bucket bucket b
 
 ![Entities](./assets/vus-entities.gif)
 
-**Demo for Q&A feature:**
+**Demo for Q&A feature 1:**
 
 ![Chat 1](./assets/vus-chat-1.gif)
+
+**Demo for Q&A feature 2:**
+
 ![Chat 2](./assets/vus-chat-2.gif)
+
+**Demo for Q&A feature 3:**
+
 ![Chat 3](./assets/vus-chat-3.gif)
 
 **Demo for search feature:**
