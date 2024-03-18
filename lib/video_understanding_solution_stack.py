@@ -230,12 +230,8 @@ class VideoUnderstandingSolutionStack(Stack):
           vpc=vpc,
           subnet_group=db_subnet_group,
           storage_encrypted=True,
-          deletion_protection=False,
+          deletion_protection=True,
         )
-
-        NagSuppressions.add_resource_suppressions(aurora_cluster, [
-            { "id": 'AwsSolutions-RDS10', "reason": 'Allow deletion_protection to be disable'},
-        ], True)
         
         self.db_writer_endpoint = aurora_cluster.cluster_endpoint
         self.db_reader_endpoint = aurora_cluster.cluster_read_endpoint

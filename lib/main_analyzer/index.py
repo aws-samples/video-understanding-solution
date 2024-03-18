@@ -517,7 +517,7 @@ class VideoAnalyzer(ABC):
         self.video_script_chunk_overlap_for_summary_generation: int = 500 # characters
         self.video_script_chunk_size_for_entities_extraction: int = 50000 #10000 # characters
         self.video_script_chunk_overlap_for_entities_extraction: int = 500 #200 # characters
-        self.video_script_storage_chunk_size: int = 768 #10000 # Number of characters, which depends on the embedding model
+        self.embedding_storage_chunk_size: int = 2048 #10000 # Number of characters, which depends on the embedding model
         self.text_similarity_score: float = 0.9
         self.objects_similarity_score: float = 0.8
         self.video_rolling_summary: str = ""
@@ -937,7 +937,7 @@ class VideoAnalyzer(ABC):
             Key=f"{self.summary_folder}/{self.video_path}.txt"
         )
 
-        summary_embedding = self.call_embedding_llm(self.summary)
+        summary_embedding = self.call_embedding_llm(self.summary[:self.embedding_storage_chunk_size])
 
         # Store summary in database
         update_stmt = (
@@ -991,15 +991,15 @@ class VideoAnalyzer(ABC):
 
         # Chunking the video script for storage in DB while converting them to embedding
         video_script_length = len(self.video_script)
-        number_of_chunks = math.ceil( (video_script_length + 1) / self.video_script_storage_chunk_size )
+        number_of_chunks = math.ceil( (video_script_length + 1) / self.embedding_storage_chunk_size)
 
         chunks: list[self.Contents] = []
         for chunk_number in range(0, number_of_chunks):
             is_last_chunk = (chunk_number == (number_of_chunks - 1))
             is_first_chunk = (chunk_number == 0)
 
-            start = 0 if is_first_chunk else int(chunk_number*self.video_script_storage_chunk_size)
-            stop = video_script_length if is_last_chunk else (chunk_number+1)*self.video_script_storage_chunk_size
+            start = 0 if is_first_chunk else int(chunk_number*self.embedding_storage_chunk_size)
+            stop = video_script_length if is_last_chunk else (chunk_number+1)*self.embedding_storage_chunk_size
             chunk_string = self.video_script[start:stop]
         
             # So long as this is not the first chunk, remove whatever before first \n since likely the chunk cutting is not done exactly at the \n
