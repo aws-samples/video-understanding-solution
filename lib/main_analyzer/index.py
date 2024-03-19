@@ -688,7 +688,14 @@ class VideoAnalyzer(ABC):
   
     def get_language_code(self):
         get_transcription = self.transcribe_client.get_transcription_job(TranscriptionJobName=self.transcription_job_name)
-        return get_transcription["TranscriptionJob"]["LanguageCodes"][0]["LanguageCode"]
+        language_code: str = 'en-US'
+        language_code_validity_duration_threshold: float = 2.0
+        
+        if "LanguageCodes" in get_transcription["TranscriptionJob"]:
+            if len(get_transcription["TranscriptionJob"]["LanguageCodes"]) > 0:
+                if float(get_transcription["TranscriptionJob"]["LanguageCodes"][0]["DurationInSeconds"]) >= language_code_validity_duration_threshold:
+                    language_code = get_transcription["TranscriptionJob"]["LanguageCodes"][0]["LanguageCode"]
+        return language_code
 
     def prompt_translate(self):
         language_code = self.get_language_code()
@@ -726,6 +733,7 @@ class VideoAnalyzer(ABC):
             "Describe the summary of the video in paragraph format.\n" \
             "You can make reasonable extrapolation of the actual video given the Video Timeline.\n" \
             "DO NOT mention 'Video Timeline' or 'video timeline'.\n" \
+            f"{self.prompt_translate()}\n" \
             "</Task>\n\n"
 
             self.video_rolling_summary = self.call_llm(system_prompt, prompt, prefilled_response, stop_sequences=["<Task>"])
@@ -765,6 +773,7 @@ class VideoAnalyzer(ABC):
                     "You can make reasonable extrapolation of the actual video given the Video Timeline.\n" \
                     "DO NOT mention 'Video Timeline' or 'video timeline'.\n" \
                     "Give the summary directly without any other sentence.\n" \
+                    f"{self.prompt_translate()}\n" \
                     "</Task>\n\n"
                     
                     chunk_summary = self.call_llm(system_prompt, prompt, prefilled_response, stop_sequences=["<Task>"])
@@ -777,6 +786,7 @@ class VideoAnalyzer(ABC):
                     "You can make reasonable extrapolation of the actual video given the Video Timeline.\n" \
                     "DO NOT mention 'Video Timeline' or 'video timeline'.\n" \
                     "Give the summary directly without any other sentence.\n" \
+                    f"{self.prompt_translate()}\n" \
                     "</Task>\n\n"
                     
                     chunk_summary = self.call_llm(system_prompt, prompt, prefilled_response, stop_sequences=["<Task>"])
@@ -793,6 +803,7 @@ class VideoAnalyzer(ABC):
                     "You can make reasonable extrapolation of the actual video given the Video Timeline.\n" \
                     "DO NOT mention 'Video Timeline' or 'video timeline'.\n" \
                     "Give the summary directly without any other sentence.\n" \
+                    f"{self.prompt_translate()}\n" \
                     "</Task>\n\n"
                     
                     chunk_summary = self.call_llm(system_prompt, prompt, prefilled_response, stop_sequences=["<Task>"])
