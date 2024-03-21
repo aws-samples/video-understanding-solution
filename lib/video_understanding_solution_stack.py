@@ -584,7 +584,7 @@ class VideoUnderstandingSolutionStack(Stack):
 
         # Task definition for main analyzer
         analyzer_task_definition = _ecs.FargateTaskDefinition(self, "TaskDefinition",
-            cpu=2048,
+            cpu=4096,
             memory_limit_mib=8192,
             task_role= main_analyzer_role,
             execution_role= main_analyzer_execution_role
@@ -602,7 +602,7 @@ class VideoUnderstandingSolutionStack(Stack):
                     directory=f"{BASE_DIR}/lib/main_analyzer/"
                 ),
             ),
-            memory_limit_mib=512,
+            memory_limit_mib=8192,
             logging=_ecs.LogDrivers.aws_logs(
                 log_group=main_analyzer_log_group,
                 stream_prefix="main",

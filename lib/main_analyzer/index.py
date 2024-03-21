@@ -198,7 +198,7 @@ class VideoPreprocessor(ABC):
         self.video_filename = ""
         self.frame_bytes: list[list[Union[int, bytes]]] = []
         self.person_frame_bytes: list[list[Union[int, bytes]]] = []
-        self.parallel_degree = 10
+        self.parallel_degree = os.cpu_count()
     
     @abstractmethod
     def call_vqa(self, image_data: str) ->str:
@@ -338,7 +338,7 @@ class VideoPreprocessor(ABC):
         if len(self.person_timestamps_millis) == 0:
             print("Warning: detect_faces_and_celebrities may be called before objects detection, which caused 0 'person' result")
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.parallel_degree) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.parallel_degree*15) as executor:
             executor.map(self._detect_faces_and_celebrities_at_timestamp, self.person_frame_bytes)
 
 
@@ -382,26 +382,36 @@ class VideoPreprocessor(ABC):
         text_timestamps_millis =  list(filter(lambda t: t is not None, text_timestamps_millis))
 
         regular_and_text_timestamps_millis = regular_timestamps_millis + text_timestamps_millis
+        print(regular_and_text_timestamps_millis)
 
         # Remove duplicate person_timestamps_millis timestamps (too close to each other) as compared to regular_and_text_timestamp_millis
         # For example, if Amazon Rekognition detects a person at millisecond 2789, and there is already regular frame interval to be extracted at 3000 with tolerance of 250 millisecond, then this 2789 timestamp will be ignored assuming the person will be captured at 3000.
         person_timestamps_millis = []
+        person_timestamp_millis_joined_with_regular = []
         for t in self.person_timestamps_millis:
             include = True
             for r in regular_and_text_timestamps_millis:
                 if abs(t-r) < self.frame_interval_tolerance:
                     include = False
+                    person_timestamp_millis_joined_with_regular.append(r)
                     break
             if include:
                 person_timestamps_millis.append(t)
 
         person_timestamps_millis =  list(filter(lambda t: t is not None, person_timestamps_millis))
+        print(person_timestamps_millis)
 
         with Pool(self.parallel_degree) as p:
             self.frame_bytes = list(p.map(self._extract_frame, regular_and_text_timestamps_millis))
+        self.frame_bytes = list(filter(lambda f: f is not None, self.frame_bytes))
+        print(len(self.frame_bytes))
 
         with Pool(self.parallel_degree) as p:
             self.person_frame_bytes = list(p.map(self._extract_frame, person_timestamps_millis))
+        self.person_frame_bytes = list(filter(lambda f: f is not None, self.person_frame_bytes))
+        
+        self.person_frame_bytes = self.person_frame_bytes + list(filter(lambda f: f[0] in person_timestamp_millis_joined_with_regular, self.frame_bytes))
+        print(len(self.person_frame_bytes))
  
     def _extract_scene_from_vqa(self, frame_info: list[Union[int, bytes]]):
         timestamp_millis = frame_info[0]
@@ -430,7 +440,7 @@ class VideoPreprocessor(ABC):
         timestamp_millis: int
         image: bytes
           
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.parallel_degree) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.parallel_degree*15) as executor:
             executor.map(self._extract_scene_from_vqa, self.frame_bytes)
     
     def wait_for_dependencies(self):
@@ -438,9 +448,12 @@ class VideoPreprocessor(ABC):
         self.wait_for_transcription_job()
 
     def run(self):
+        print(self.video_s3_path)
         self.download_video_and_load_metadata()
         self.iterate_object_detection_result()
         print("iterated")
+        print(len(self.person_timestamps_millis))
+        print(len(self.text_timestamps_millis))
         a = time.time()
         self.extract_frames()
         b = time.time()
@@ -1167,6 +1180,7 @@ class VideoAnalyzerBedrock(VideoAnalyzer):
                 raise e
 
         response: str = json.loads(bedrock_response.get("body").read())["content"][0]["text"]
+        print(response)
         return response
     
     def call_embedding_llm(self, document):
@@ -1247,4 +1261,5 @@ def handler():
     }
 
 if __name__ == "__main__":
+    print(os.cpu_count())
     handler()
