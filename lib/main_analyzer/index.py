@@ -10,6 +10,7 @@ import cv2
 import base64
 from PIL import Image
 import concurrent.futures
+from multiprocessing import Pool
 
 secrets_manager = boto3.client('secretsmanager')
 
@@ -35,6 +36,7 @@ writer_endpoint = os.environ['DB_WRITER_ENDPOINT']
 video_s3_path = os.environ['VIDEO_S3_PATH'] 
 transcription_job_name = os.environ['TRANSCRIPTION_JOB_NAME']
 label_detection_job_id = os.environ['LABEL_DETECTION_JOB_ID']
+
 
 credentials = json.loads(secrets_manager.get_secret_value(SecretId=secret_name)["SecretString"])
 username = credentials["username"]
@@ -163,6 +165,10 @@ class ObjectFinding():
         return self.label
 
 class VideoPreprocessor(ABC):
+    s3_client = boto3.client("s3")
+    transcribe_client = boto3.client("transcribe")
+    rekognition_client = boto3.client("rekognition")
+    
     def __init__(self, 
         label_detection_job_id: str,
         transcription_job_name: str,
@@ -171,9 +177,6 @@ class VideoPreprocessor(ABC):
         video_transcript_s3_path: str,
         frame_interval: str):
 
-        self.s3_client = boto3.client("s3")
-        self.transcribe_client = boto3.client("transcribe")
-        self.rekognition_client = boto3.client("rekognition")
         self.label_detection_job_id: str = label_detection_job_id
         self.transcription_job_name: str = transcription_job_name
         self.bucket_name: str = bucket_name
@@ -190,10 +193,12 @@ class VideoPreprocessor(ABC):
         self.person_timestamps_millis: list[int] = []
         self.text_timestamps_millis: list[int] = []
         self.frame_interval: int = int(frame_interval) # Millisecond
+        self.frame_interval_tolerance: int = int(0.25*self.frame_interval) # In millisecond. This means, any frame located within this tolerance in the timeline will be considered the same as the main frame being taken at regular interval
         self.frame_dim_for_vqa: tuple(int) = (512, 512)
         self.video_filename = ""
-        self.video: cv2.VideoCapture = None
         self.frame_bytes: list[list[Union[int, bytes]]] = []
+        self.person_frame_bytes: list[list[Union[int, bytes]]] = []
+        self.parallel_degree = 10
     
     @abstractmethod
     def call_vqa(self, image_data: str) ->str:
@@ -269,115 +274,136 @@ class VideoPreprocessor(ABC):
         video_transcription_file: dict = self.s3_client.get_object(Bucket=self.bucket_name, Key=self.video_transcript_s3_path)
         self.transcript = json.loads(video_transcription_file['Body'].read().decode('utf-8'))
 
-    def download_video(self):
+    def download_video_and_load_metadata(self):
         filename: str = os.path.basename(self.video_s3_path)
         self.s3_client.download_file(self.bucket_name, self.video_s3_path, filename)
         self.video_filename = filename
-
-    def load_video(self):
-        self.video: cv2.VideoCapture = cv2.VideoCapture(self.video_filename)
-        frame_count = self.video.get(cv2.CAP_PROP_FRAME_COUNT)
-        fps = self.video.get(cv2.CAP_PROP_FPS)
+        video: cv2.VideoCapture = cv2.VideoCapture(self.video_filename)
+        frame_count = video.get(cv2.CAP_PROP_FRAME_COUNT)
+        fps = video.get(cv2.CAP_PROP_FPS)
         self.video_duration_seconds = float(frame_count/fps)
         self.video_duration_millis = int(self.video_duration_seconds*1000)
+
+    def load_video(self, filename) -> cv2.VideoCapture:
+        video: cv2.VideoCapture = cv2.VideoCapture(filename)
+        return video
     
-    def detect_faces_and_celebrities(self):
-        if self.video == None:
-            raise Exception("detect_faces_and_celebrities is called before the video is loaded")
-        if len(self.person_timestamps_millis) == 0:
-            print("Warning: detect_faces_and_celebrities is called before objects detection, which cause 0 'person' result")
+    def _detect_faces_and_celebrities_at_timestamp(self, timestamp_data):
+        timestamp_millis: int = timestamp_data[0]
+        image: bytes = timestamp_data[1]
+
+        # Call Rekognition to detect celebrity
+        recognize_celebrity_response: dict = self.rekognition_client.recognize_celebrities(Image={'Bytes': image})
+        celebrity_findings: list[dict] = recognize_celebrity_response["CelebrityFaces"]
+        unrecognized_faces: list[dict] = recognize_celebrity_response["UnrecognizedFaces"]
         
-        video = self.video
-        timestamp_millis: int
-        for timestamp_millis in self.person_timestamps_millis:
-            video.set(cv2.CAP_PROP_POS_MSEC, int(timestamp_millis))
-            success, frame = video.read()
+        # Parse Rekognition celebrity detection data and add to dictionary as appropriate
+        if len(celebrity_findings) > 0:
+            if timestamp_millis not in self.celebrities: self.celebrities[timestamp_millis] = []
+            celebrity_finding_dict: dict
+            for celebrity_finding_dict in celebrity_findings:
+                if int(celebrity_finding_dict["MatchConfidence"]) < CelebrityFinding.celebrity_match_confidence_threshold: continue
+                celebrity_finding = CelebrityFinding(celebrity_finding_dict)
+                self.celebrities[timestamp_millis].append(celebrity_finding)
+
+        # Only call the detect face APU if there are other faces beside the recognized celebrity in this frame
+        # This also applies when there is 0 celebrity detected, but there are more faces in the frame.
+        if len(unrecognized_faces) == 0: return None
+
+        # Call Rekognition to detect faces
+        face_findings: dict = self.rekognition_client.detect_faces(Image={'Bytes': image}, Attributes=['ALL'])['FaceDetails']
+
+        if len(face_findings) == 0: return None
+
+        if timestamp_millis not in self.faces: self.faces[timestamp_millis] = []
+        face_finding_dict: dict
+        for face_finding_dict in face_findings:
+            if int(face_finding_dict["Confidence"]) < FaceFinding.face_detection_confidence_threshold : continue
+            face_finding = FaceFinding(face_finding_dict)
+
+            # The below code checks if this face is already captured as celebrity by checking the bounding box for the detected celebrities at this frame
+            face_found_in_celebrities_list = False
+            if timestamp_millis in self.celebrities:
+                for celebrity_finding in self.celebrities[timestamp_millis]:
+                    if celebrity_finding.is_matching_face(face_finding.top, face_finding.left, face_finding.height, face_finding.width): 
+                        face_found_in_celebrities_list = True
+
+            # Only add if the face is not found in the celebrity list
+            if not face_found_in_celebrities_list:
+                # Only add if there is no other face with similar age range at the same millisecond.
+                if not face_finding.is_duplicate(self.faces[timestamp_millis]):
+                    self.faces[timestamp_millis].append(face_finding)
+
+    def detect_faces_and_celebrities(self):
+        if len(self.person_timestamps_millis) == 0:
+            print("Warning: detect_faces_and_celebrities may be called before objects detection, which caused 0 'person' result")
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.parallel_degree) as executor:
+            executor.map(self._detect_faces_and_celebrities_at_timestamp, self.person_frame_bytes)
+
+
+    def _extract_frame(self, timestamp_millis):
+        video = self.load_video(self.video_filename)
+        video.set(cv2.CAP_PROP_POS_MSEC, int(timestamp_millis))
+        success, frame = video.read()
+        if success:
             # Resize frame to 512 x 512 px
             dim = self.frame_dim_for_vqa
             # This may fail if the frame is empty. Just skip the frame if so.
             try:
                 frame = cv2.resize(frame, dim, interpolation = cv2.INTER_AREA)
             except:
-                continue
-            
-            if not success: continue
-
+                return None
+        
             image_pil = Image.fromarray(frame)
             io_stream = io.BytesIO()
             image_pil.save(io_stream, format='JPEG')
             image = io_stream.getvalue()
+            return [timestamp_millis, image]
+        del video
 
-            # Call Rekognition to detect celebrity
-            recognize_celebrity_response: dict = self.rekognition_client.recognize_celebrities(Image={'Bytes': image})
-            celebrity_findings: list[dict] = recognize_celebrity_response["CelebrityFaces"]
-            unrecognized_faces: list[dict] = recognize_celebrity_response["UnrecognizedFaces"]
-            
-            # Parse Rekognition celebrity detection data and add to dictionary as appropriate
-            if len(celebrity_findings) > 0:
-                if timestamp_millis not in self.celebrities: self.celebrities[timestamp_millis] = []
-                celebrity_finding_dict: dict
-                for celebrity_finding_dict in celebrity_findings:
-                    if int(celebrity_finding_dict["MatchConfidence"]) < CelebrityFinding.celebrity_match_confidence_threshold: continue
-                    celebrity_finding = CelebrityFinding(celebrity_finding_dict)
-                    self.celebrities[timestamp_millis].append(celebrity_finding)
+    def extract_frames(self):
+        # Create a list containing milliseconds where frame should be extracted from the video, according to the interval.
+        # This may look like [0, 1000, 2000, 3000]
+        regular_timestamps_millis = list(range(0, self.video_duration_millis, self.frame_interval))
 
-            # Only call the detect face APU if there are other faces beside the recognized celebrity in this frame
-            # This also applies when there is 0 celebrity detected, but there are more faces in the frame.
-            if len(unrecognized_faces) == 0: continue
+        # Remove duplicate text_timestamp_millis timestamps (too close to each other) as compared to regular_timestamp_millis
+        # For example, if Amazon Rekognition detects text at millisecond 2103, and there is already regular frame interval to be extracted at 2000 with tolerance of 250 millisecond, then this 2103 timestamp will be ignored assuming the text will be captured at 2000.
+        text_timestamps_millis = []
+        for t in self.text_timestamps_millis:
+            include = True
+            for r in regular_timestamps_millis:
+                if abs(t-r) < self.frame_interval_tolerance:
+                    include = False
+                    break
+            if include:
+                text_timestamps_millis.append(t)
 
-            # Call Rekognition to detect faces
-            face_findings: dict = self.rekognition_client.detect_faces(Image={'Bytes': image}, Attributes=['ALL'])['FaceDetails']
+        text_timestamps_millis =  list(filter(lambda t: t is not None, text_timestamps_millis))
 
-            if len(face_findings) == 0: continue
+        regular_and_text_timestamps_millis = regular_timestamps_millis + text_timestamps_millis
 
-            if timestamp_millis not in self.faces: self.faces[timestamp_millis] = []
-            face_finding_dict: dict
-            for face_finding_dict in face_findings:
-                if int(face_finding_dict["Confidence"]) < FaceFinding.face_detection_confidence_threshold : continue
-                face_finding = FaceFinding(face_finding_dict)
+        # Remove duplicate person_timestamps_millis timestamps (too close to each other) as compared to regular_and_text_timestamp_millis
+        # For example, if Amazon Rekognition detects a person at millisecond 2789, and there is already regular frame interval to be extracted at 3000 with tolerance of 250 millisecond, then this 2789 timestamp will be ignored assuming the person will be captured at 3000.
+        person_timestamps_millis = []
+        for t in self.person_timestamps_millis:
+            include = True
+            for r in regular_and_text_timestamps_millis:
+                if abs(t-r) < self.frame_interval_tolerance:
+                    include = False
+                    break
+            if include:
+                person_timestamps_millis.append(t)
 
-                # The below code checks if this face is already captured as celebrity by checking the bounding box for the detected celebrities at this frame
-                face_found_in_celebrities_list = False
-                if timestamp_millis in self.celebrities:
-                    for celebrity_finding in self.celebrities[timestamp_millis]:
-                        if celebrity_finding.is_matching_face(face_finding.top, face_finding.left, face_finding.height, face_finding.width): 
-                            face_found_in_celebrities_list = True
+        person_timestamps_millis =  list(filter(lambda t: t is not None, person_timestamps_millis))
 
-                # Only add if the face is not found in the celebrity list
-                if not face_found_in_celebrities_list:
-                    # Only add if there is no other face with similar age range at the same millisecond.
-                    if not face_finding.is_duplicate(self.faces[timestamp_millis]):
-                        self.faces[timestamp_millis].append(face_finding)
-    
+        with Pool(self.parallel_degree) as p:
+            self.frame_bytes = list(p.map(self._extract_frame, regular_and_text_timestamps_millis))
 
-    def extract_frames_for_vqa(self):
-        if self.video == None:
-            raise Exception("detect_faces_and_celebrities is called before the video is loaded")
-
-        video = self.video
-
-        timestamp_millis_list = (list(range(0, self.video_duration_millis, self.frame_interval)) + self.text_timestamps_millis)
-        timestamp_millis: int
-        for timestamp_millis in timestamp_millis_list:
-            video.set(cv2.CAP_PROP_POS_MSEC, int(timestamp_millis))
-            success, frame = video.read()
-            # Resize frame to 512 x 512 px
-            dim = self.frame_dim_for_vqa
-            # This may fail if the frame is empty. Just skip the frame if so.
-            try:
-                frame = cv2.resize(frame, dim, interpolation = cv2.INTER_AREA)
-            except:
-                continue
-            
-            if not success: continue
-
-            image_pil = Image.fromarray(frame)
-            io_stream = io.BytesIO()
-            image_pil.save(io_stream, format='JPEG')
-            image = io_stream.getvalue()
-            self.frame_bytes.append([timestamp_millis, image])
-
-    def extract_scene_from_vqa(self, frame_info: list[Union[int, bytes]]):
+        with Pool(self.parallel_degree) as p:
+            self.person_frame_bytes = list(p.map(self._extract_frame, person_timestamps_millis))
+ 
+    def _extract_scene_from_vqa(self, frame_info: list[Union[int, bytes]]):
         timestamp_millis = frame_info[0]
         image = frame_info[1]
 
@@ -404,24 +430,37 @@ class VideoPreprocessor(ABC):
         timestamp_millis: int
         image: bytes
           
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            executor.map(self.extract_scene_from_vqa, self.frame_bytes)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.parallel_degree) as executor:
+            executor.map(self._extract_scene_from_vqa, self.frame_bytes)
     
     def wait_for_dependencies(self):
         self.wait_for_rekognition_label_detection(sort_by="TIMESTAMP")
         self.wait_for_transcription_job()
 
     def run(self):
-        self.download_video() 
-        self.load_video()
+        self.download_video_and_load_metadata()
         self.iterate_object_detection_result()
+        print("iterated")
+        a = time.time()
+        self.extract_frames()
+        b = time.time()
+        print("extracted")
+        print(b-a)
         self.detect_faces_and_celebrities()
-        self.extract_frames_for_vqa()
+        c = time.time()
+        print("face detected")
+        print(c-b)
         self.extract_scenes_from_vqa()
+        d = time.time()
+        print("vqa extracted")
+        print(d-c)
         self.fetch_transcription()
         return self.visual_objects, self.visual_scenes, self.visual_texts, self.transcript, self.celebrities, self.faces
 
 class VideoPreprocessorBedrockVQA(VideoPreprocessor):
+    config = Config(read_timeout=1000) # Extends botocore read timeout to 1000 seconds
+    bedrock_client = boto3.client(service_name="bedrock-runtime", config=config)
+    
     def __init__(self, 
         label_detection_job_id: str,
         transcription_job_name: str,
@@ -439,9 +478,6 @@ class VideoPreprocessorBedrockVQA(VideoPreprocessor):
             video_transcript_s3_path=video_transcript_s3_path,
             frame_interval=frame_interval
         )
-
-        config = Config(read_timeout=1000) # Extends botocore read timeout to 1000 seconds
-        self.bedrock_client = boto3.client(service_name="bedrock-runtime", config=config)
 
         self.vqa_model_name = vqa_model_name
         self.llm_parameters = {

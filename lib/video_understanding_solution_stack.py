@@ -584,8 +584,8 @@ class VideoUnderstandingSolutionStack(Stack):
 
         # Task definition for main analyzer
         analyzer_task_definition = _ecs.FargateTaskDefinition(self, "TaskDefinition",
-            cpu=1024,
-            memory_limit_mib=2048,
+            cpu=2048,
+            memory_limit_mib=8192,
             task_role= main_analyzer_role,
             execution_role= main_analyzer_execution_role
         )
