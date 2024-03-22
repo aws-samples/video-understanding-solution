@@ -37,6 +37,7 @@ embedding_model_id = "cohere.embed-multilingual-v3"
 raw_folder = "source"
 summary_folder = "summary"
 video_script_folder = "video_timeline"
+video_caption_folder = "captions"
 transcription_root_folder = "audio_transcript"
 transcription_folder = f"{transcription_root_folder}/{raw_folder}"
 entity_sentiment_folder = "entities"
@@ -45,7 +46,7 @@ video_table_name = "videos"
 entities_table_name = "entities"
 content_table_name = "content"
 embedding_dimension = 1024
-video_search_by_summary_acceptable_embedding_distance = 0.63 # Using cosine distance
+video_search_by_summary_acceptable_embedding_distance = 0.50 # Using cosine distance
 videos_api_resource = "videos"
 visual_objects_detection_confidence_threshold = 30.0
 
@@ -552,6 +553,7 @@ class VideoUnderstandingSolutionStack(Stack):
                             resources=[
                                 video_bucket_s3.arn_for_objects(f"{summary_folder}/*"),
                                 video_bucket_s3.arn_for_objects(f"{video_script_folder}/*"),
+                                video_bucket_s3.arn_for_objects(f"{video_caption_folder}/*"),
                                 video_bucket_s3.arn_for_objects(f"{entity_sentiment_folder}/*")
                             ],
                             effect=_iam.Effect.ALLOW,
@@ -643,6 +645,7 @@ class VideoUnderstandingSolutionStack(Stack):
                     _sfn_tasks.TaskEnvironmentVariable(name="TRANSCRIPTION_FOLDER", value= transcription_folder),
                     _sfn_tasks.TaskEnvironmentVariable(name="ENTITY_SENTIMENT_FOLDER", value= entity_sentiment_folder),
                     _sfn_tasks.TaskEnvironmentVariable(name="SUMMARY_FOLDER", value= summary_folder),
+                    _sfn_tasks.TaskEnvironmentVariable(name="VIDEO_CAPTION_FOLDER", value= video_caption_folder),
                     _sfn_tasks.TaskEnvironmentVariable(name='FRAME_INTERVAL', value= frame_interval),
                 ]
             )],
@@ -780,6 +783,7 @@ class VideoUnderstandingSolutionStack(Stack):
                                 f"arn:aws:s3:::{video_bucket_s3.bucket_name}", 
                                 f"arn:aws:s3:::{video_bucket_s3.bucket_name}/{raw_folder}/*",
                                 f"arn:aws:s3:::{video_bucket_s3.bucket_name}/{video_script_folder}/*",
+                                f"arn:aws:s3:::{video_bucket_s3.bucket_name}/{video_caption_folder}/*",
                                 f"arn:aws:s3:::{video_bucket_s3.bucket_name}/{summary_folder}/*",
                                 f"arn:aws:s3:::{video_bucket_s3.bucket_name}/{entity_sentiment_folder}/*"
                             ]
@@ -1034,6 +1038,7 @@ class VideoUnderstandingSolutionStack(Stack):
                 "MODEL_ID": chat_model_id,
                 "RAW_FOLDER": raw_folder,
                 "VIDEO_SCRIPT_FOLDER": video_script_folder,
+                "VIDEO_CAPTION_FOLDER": video_caption_folder,
                 "TRANSCRIPTION_FOLDER": transcription_folder.replace("/","\/"),
                 "ENTITY_SENTIMENT_FOLDER": entity_sentiment_folder,
                 "SUMMARY_FOLDER": summary_folder,

@@ -25,6 +25,7 @@ video_script_folder = os.environ["VIDEO_SCRIPT_FOLDER"]
 transcription_folder = os.environ["TRANSCRIPTION_FOLDER"]
 entity_sentiment_folder = os.environ["ENTITY_SENTIMENT_FOLDER"]
 summary_folder = os.environ["SUMMARY_FOLDER"]
+video_caption_folder = os.environ["VIDEO_CAPTION_FOLDER"]
 
 database_name = os.environ['DATABASE_NAME']
 video_table_name = os.environ['VIDEO_TABLE_NAME']
@@ -186,6 +187,7 @@ class VideoPreprocessor(ABC):
         self.video_duration_millis: int = 0
         self.visual_objects: dict[int, list[ObjectFinding]] = {}
         self.visual_scenes: dict[int, str] = {}
+        self.visual_captions: dict[int, str] = {}
         self.visual_texts: dict[int, list[str]] = {}
         self.transcript: dict
         self.celebrities: dict[int, list[CelebrityFinding]] = {}
@@ -382,7 +384,6 @@ class VideoPreprocessor(ABC):
         text_timestamps_millis =  list(filter(lambda t: t is not None, text_timestamps_millis))
 
         regular_and_text_timestamps_millis = regular_timestamps_millis + text_timestamps_millis
-        print(regular_and_text_timestamps_millis)
 
         # Remove duplicate person_timestamps_millis timestamps (too close to each other) as compared to regular_and_text_timestamp_millis
         # For example, if Amazon Rekognition detects a person at millisecond 2789, and there is already regular frame interval to be extracted at 3000 with tolerance of 250 millisecond, then this 2789 timestamp will be ignored assuming the person will be captured at 3000.
@@ -399,42 +400,48 @@ class VideoPreprocessor(ABC):
                 person_timestamps_millis.append(t)
 
         person_timestamps_millis =  list(filter(lambda t: t is not None, person_timestamps_millis))
-        print(person_timestamps_millis)
 
         with Pool(self.parallel_degree) as p:
             self.frame_bytes = list(p.map(self._extract_frame, regular_and_text_timestamps_millis))
         self.frame_bytes = list(filter(lambda f: f is not None, self.frame_bytes))
-        print(len(self.frame_bytes))
 
         with Pool(self.parallel_degree) as p:
             self.person_frame_bytes = list(p.map(self._extract_frame, person_timestamps_millis))
         self.person_frame_bytes = list(filter(lambda f: f is not None, self.person_frame_bytes))
         
         self.person_frame_bytes = self.person_frame_bytes + list(filter(lambda f: f[0] in person_timestamp_millis_joined_with_regular, self.frame_bytes))
-        print(len(self.person_frame_bytes))
  
     def _extract_scene_from_vqa(self, frame_info: list[Union[int, bytes]]):
         timestamp_millis = frame_info[0]
         image = frame_info[1]
 
-        system_prompt = "You are an expert in extracting information from video frames. Each video frame is an image. You will extract the scene, text, and more information."
+        system_prompt = "You are an expert in extracting information from video frames. Each video frame is an image. You will extract the scene, text, and caption."
         task_prompt =   "Extract information from this image and output a JSON with this format:\n" \
                     "{\n" \
                     "\"scene\" : \"String\",\n" \
+                    "\"caption\" : \"String\",\n" \
                     "\"text\" : [\"String\", \"String\" , . . .],\n" \
                     "}\n" \
-                    "For \"scene\", describe what you see in the image in detail, yet succinct. \n" \
-                    "For \"text\", list the text you see in that image confidently.\n"
+                    "For \"scene\", look carefully, think hard, and describe what you see in the image in detail, yet succinct. \n" \
+                    "For \"caption\", look carefully, think hard, and give a SHORT caption (3-8 words) that best describes what is happening in the image. This is intended for visually impaired ones. \n" \
+                    "For \"text\", list the text you see in that image confidently. If nothing return empty list.\n"
         vqa_response = self.call_vqa(image_data=base64.b64encode(image).decode("utf-8"), system_prompt = system_prompt, task_prompt=task_prompt) 
 
         # Sometimes the response might be censored due to false positive of inappropriate content. When that happens, just skip this frame.
-        try:
-            parsed_vqa_results = json.loads(vqa_response)
-        except:
-            return
+        pattern = r'"scene"\s*:\s*"(.+?)".*?"caption"\s*:\s*"(.+?)".*?"text"\s*:\s*\[(.*?)\]'
+        match = re.search(pattern, vqa_response, re.DOTALL)
 
-        self.visual_scenes[timestamp_millis] = parsed_vqa_results["scene"]
-        self.visual_texts[timestamp_millis] = parsed_vqa_results["text"]
+        if match:
+            scene = match.group(1)
+            caption = match.group(2)
+            text = match.group(3)
+            self.visual_scenes[timestamp_millis] = scene
+            try:
+                self.visual_texts[timestamp_millis] = json.loads(text)
+            except:
+                pass
+            self.visual_captions[timestamp_millis] = caption
+
     
     def extract_scenes_from_vqa(self):
         timestamp_millis: int
@@ -448,27 +455,13 @@ class VideoPreprocessor(ABC):
         self.wait_for_transcription_job()
 
     def run(self):
-        print(self.video_s3_path)
         self.download_video_and_load_metadata()
         self.iterate_object_detection_result()
-        print("iterated")
-        print(len(self.person_timestamps_millis))
-        print(len(self.text_timestamps_millis))
-        a = time.time()
         self.extract_frames()
-        b = time.time()
-        print("extracted")
-        print(b-a)
         self.detect_faces_and_celebrities()
-        c = time.time()
-        print("face detected")
-        print(c-b)
         self.extract_scenes_from_vqa()
-        d = time.time()
-        print("vqa extracted")
-        print(d-c)
         self.fetch_transcription()
-        return self.visual_objects, self.visual_scenes, self.visual_texts, self.transcript, self.celebrities, self.faces
+        return self.visual_objects, self.visual_scenes, self.visual_captions, self.visual_texts, self.transcript, self.celebrities, self.faces
 
 class VideoPreprocessorBedrockVQA(VideoPreprocessor):
     config = Config(read_timeout=1000) # Extends botocore read timeout to 1000 seconds
@@ -534,6 +527,7 @@ class VideoAnalyzer(ABC):
         video_path: str, 
         visual_objects: dict[int, list[str]],
         visual_scenes: dict[int, str], 
+        visual_captions: dict[int, str],
         visual_texts: dict[int, list[str]], 
         transcript: dict,
         celebrities: dict[int, list[str]],
@@ -551,16 +545,19 @@ class VideoAnalyzer(ABC):
         self.entity_sentiment_folder: str = entity_sentiment_folder
         self.transcription_job_name: str = transcription_job_name
         self.video_script_folder: str = video_script_folder
+        self.video_caption_folder: str = video_caption_folder
         self.video_name: str = video_name
         self.video_path: str = video_path
         self.original_visual_objects: dict[int, list[ObjectFinding]] = visual_objects
         self.original_visual_scenes: dict[int, str] = visual_scenes
+        self.original_visual_captions: dict[int, str] = visual_captions
         self.original_visual_texts: dict[int, list[str]] = visual_texts
         self.original_transcript: dict = transcript
         self.original_celebrities: dict[int, list[CelebrityFinding]] = celebrities
         self.original_faces: dict[int, list[FaceFinding]] = faces
         self.visual_objects: list[list[Union[int, list[str]]]] = []
         self.visual_scenes: list[list[Union[int, str]]] = []
+        self.visual_captions: list[list[Union[int, str]]] = []
         self.visual_texts: list[list[Union[int, list[str]]]] = []
         self.transcript: list[list[Union[int, str]]] = []
         self.celebrities:list[list[Union[int, list[str]]]]  = []
@@ -576,6 +573,7 @@ class VideoAnalyzer(ABC):
         self.video_rolling_sentiment: str = ""
         self.combined_video_script: str = ""
         self.all_combined_video_script: str = ""
+        self.combined_visual_captions: str = ""
         self.llm_parameters: dict = {}
         self.summary: str = ""
         self.entities: str = ""
@@ -631,6 +629,9 @@ class VideoAnalyzer(ABC):
   
     def preprocess_visual_scenes(self):
         self.visual_scenes =  sorted(self.original_visual_scenes.items())
+
+    def preprocess_visual_captions(self):
+        self.visual_captions =  sorted(self.original_visual_captions.items())
       
     def preprocess_visual_texts(self):
         visual_texts_across_timestamps = dict(sorted(self.original_visual_texts.items()))
@@ -689,6 +690,26 @@ class VideoAnalyzer(ABC):
 
     def preprocess_faces(self):
         self.faces = sorted(self.original_faces.items())
+    
+    def generate_visual_captions(self):
+        def transform_captions(x):
+            timestamp = round(x[0]/1000, 1) # Convert millis to second
+            caption = x[1]
+            return (timestamp, f"Caption:{caption}")
+        captions = list(map(transform_captions, self.visual_captions))
+
+        def transform_transcript(x):
+            timestamp = round(x[0]/1000, 1) # Convert millis to second
+            transcript = x[1]
+            return (timestamp, f"Voice:{transcript}")
+        transcript  = list(map(transform_transcript, self.transcript))
+
+        # Combine all inputs
+        combined_visual_captions = sorted( captions + transcript )
+        
+        combined_visual_captions = "\n".join(list(map(lambda x: f"{x[0]}:{x[1]}", combined_visual_captions)))
+        
+        self.combined_visual_captions = combined_visual_captions
       
     def generate_combined_video_script(self):
         def transform_objects(x):
@@ -1098,25 +1119,35 @@ class VideoAnalyzer(ABC):
         # Store in database
         session.add_all(chunks)
         session.commit()
+    
+    def store_video_visual_captions(self):
+        self.s3_client.put_object(
+            Body=self.combined_visual_captions, 
+            Bucket=self.bucket_name, 
+            Key=f"{self.video_caption_folder}/{self.video_path}.txt"
+        )
 
-      
     def run(self):
         self.preprocess_visual_scenes()
+        self.preprocess_visual_captions()
         self.preprocess_visual_texts()
         self.preprocess_transcript()
         self.preprocess_celebrities()
         self.preprocess_faces()
 
         self.generate_combined_video_script()
+        self.generate_visual_captions()
 
         self.summary = self.generate_summary()
         self.entities = self.extract_sentiment()
         self.video_script = self.all_combined_video_script
     
     def store(self):
+        self.store_video_visual_captions()
+        self.store_video_script_result()
         self.store_summary_result()
         self.store_sentiment_result()
-        self.store_video_script_result()
+        
 
 class VideoAnalyzerBedrock(VideoAnalyzer):    
     def __init__(self, 
@@ -1127,6 +1158,7 @@ class VideoAnalyzerBedrock(VideoAnalyzer):
         video_path: str, 
         visual_objects: dict[int, list[str]],
         visual_scenes: dict[int, str], 
+        visual_captions: dict[int, str],
         visual_texts: dict[int, list[str]], 
         transcript: dict,
         celebrities: dict[int, list[str]],
@@ -1136,7 +1168,7 @@ class VideoAnalyzerBedrock(VideoAnalyzer):
         video_script_folder: str,
         transcription_job_name: str
         ):
-        super().__init__(bucket_name, video_name, video_path, visual_objects, visual_scenes, visual_texts, transcript, celebrities, faces,summary_folder, entity_sentiment_folder, video_script_folder, transcription_job_name)
+        super().__init__(bucket_name, video_name, video_path, visual_objects, visual_scenes, visual_captions, visual_texts, transcript, celebrities, faces,summary_folder, entity_sentiment_folder, video_script_folder, transcription_job_name)
         
         config = Config(read_timeout=1000) # Extends botocore read timeout to 1000 seconds
         self.bedrock_client = boto3.client(service_name="bedrock-runtime", config=config)
@@ -1180,7 +1212,6 @@ class VideoAnalyzerBedrock(VideoAnalyzer):
                 raise e
 
         response: str = json.loads(bedrock_response.get("body").read())["content"][0]["text"]
-        print(response)
         return response
     
     def call_embedding_llm(self, document):
@@ -1225,7 +1256,7 @@ def handler():
         video_preprocessor.wait_for_dependencies()
         
         # Preprocess and extract information
-        visual_objects, visual_scenes, visual_texts, transcript, celebrities, faces = video_preprocessor.run()
+        visual_objects, visual_scenes, visual_captions, visual_texts, transcript, celebrities, faces = video_preprocessor.run()
         
         # Initiate class for video analysis
         video_analyzer = VideoAnalyzerBedrock(
@@ -1236,6 +1267,7 @@ def handler():
             video_path=video_path,
             visual_objects=visual_objects,
             visual_scenes=visual_scenes,
+            visual_captions=visual_captions,
             visual_texts=visual_texts, 
             transcript=transcript,
             celebrities=celebrities,
@@ -1261,5 +1293,4 @@ def handler():
     }
 
 if __name__ == "__main__":
-    print(os.cpu_count())
     handler()

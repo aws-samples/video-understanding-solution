@@ -16,6 +16,7 @@ frontend:
         - sed -i "s/PLACEHOLDER_MODEL_ID/$MODEL_ID/g" ./src/aws-exports.js
         - sed -i "s/PLACEHOLDER_RAW_FOLDER/$RAW_FOLDER/g" ./src/aws-exports.js
         - sed -i "s/PLACEHOLDER_VIDEO_SCRIPT_FOLDER/$VIDEO_SCRIPT_FOLDER/g" ./src/aws-exports.js
+        - sed -i "s/PLACEHOLDER_VIDEO_CAPTION_FOLDER/$VIDEO_CAPTION_FOLDER/g" ./src/aws-exports.js
         - sed -i "s/PLACEHOLDER_TRANSCRIPTION_FOLDER/$TRANSCRIPTION_FOLDER/g" ./src/aws-exports.js
         - sed -i "s/PLACEHOLDER_ENTITY_SENTIMENT_FOLDER/$ENTITY_SENTIMENT_FOLDER/g" ./src/aws-exports.js
         - sed -i "s/PLACEHOLDER_SUMMARY_FOLDER/$SUMMARY_FOLDER/g" ./src/aws-exports.js

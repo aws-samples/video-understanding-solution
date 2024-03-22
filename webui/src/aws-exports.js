@@ -10,6 +10,7 @@ export default {
     "model_id": "PLACEHOLDER_MODEL_ID",
     "raw_folder": "PLACEHOLDER_RAW_FOLDER",
     "video_script_folder": "PLACEHOLDER_VIDEO_SCRIPT_FOLDER",
+    "video_caption_folder": "PLACEHOLDER_VIDEO_CAPTION_FOLDER",
     "transcription_folder": "PLACEHOLDER_TRANSCRIPTION_FOLDER",
     "entity_sentiment_folder": "PLACEHOLDER_ENTITY_SENTIMENT_FOLDER",
     "summary_folder": "PLACEHOLDER_SUMMARY_FOLDER",

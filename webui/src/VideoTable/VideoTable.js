@@ -40,6 +40,7 @@ export class VideoTable extends Component {
     this.summaryFolder = props.summaryFolder
     this.transcriptionFolder = props.transcriptionFolder
     this.videoScriptFolder = props.videoScriptFolder
+    this.videoCaptionFolder = props.videoCaptionFolder
     this.entitySentimentFolder = props.entitySentimentFolder
     this.restApiUrl = props.restApiUrl
     this.videosApiResource = props.videosApiResource
@@ -112,6 +113,7 @@ export class VideoTable extends Component {
         rawEntities: undefined,
         entities: undefined,
         videoScript: undefined,
+        videoCaption: undefined,
         videoShown: false,
         chats: [],
         chatSummary: "",
@@ -199,6 +201,16 @@ export class VideoTable extends Component {
     try {
       const response = await this.s3Client.send(command);
       video.videoScript = await response.Body.transformToString();
+    } catch (err) {}
+
+    // Try to get the video per frame caption
+    var command = new GetObjectCommand({
+      Bucket: this.bucketName,
+      Key: this.videoCaptionFolder + "/" + name + ".txt",
+    });
+    try {
+      const response = await this.s3Client.send(command);
+      video.videoCaption = await response.Body.transformToString();
     } catch (err) {}
 
     video.loaded = true
