@@ -57,8 +57,8 @@ The `make prepare` utility is currently supported only for MacOS Ventura, Amazon
 7. NodeJS 16 with version 16.20.2 above, or NodeJS 20 with version 20.10.0 or above, along with NPM.
 8. jq, zip, unzip
 9. CDK Toolkit 2.122.0 or above. Follow https://docs.aws.amazon.com/cdk/v2/guide/getting_started.html#getting_started_install for installation.
-10. Python CDK lib 2.122.0 or above with @aws-cdk/aws-amplify-alpha. Follow https://docs.aws.amazon.com/cdk/v2/guide/getting_started.html#getting_started_concepts
-11. CDK nag 2.28.16 or above.
+10. Python CDK lib 2.122.0 or above with @aws-cdk/aws-amplify-alpha. Follow https://docs.aws.amazon.com/cdk/v2/guide/getting_started.html#getting_started_concepts. This is for the Python CDK libraries since the CDK template is in Python.
+11. CDK nag 2.28.16 or above. CDK nag is used to scan the CDK template for best practices violation.
 
 ### Deploy
 
