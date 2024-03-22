@@ -436,11 +436,11 @@ class VideoPreprocessor(ABC):
             caption = match.group(2)
             text = match.group(3)
             self.visual_scenes[timestamp_millis] = scene
-            try:
-                self.visual_texts[timestamp_millis] = json.loads(text)
-            except:
-                pass
+            if len(text) > 0:
+                self.visual_texts[timestamp_millis] = [t.strip().strip("\"") for t in text.replace("\n","").split(",")]
             self.visual_captions[timestamp_millis] = caption
+
+            
 
     
     def extract_scenes_from_vqa(self):
