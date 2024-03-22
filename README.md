@@ -43,7 +43,10 @@ Refer to the Deployment section below on how to deploy it to your own AWS accoun
 
 ### Prerequisites
 
-Here are prerequisites for deploying this solution with AWS CDK:
+Here are prerequisites for deploying this solution with AWS CDK. Note that you can automatically install item 4-11 by running `make prepare`.
+
+The `make prepare` utility is currently supported only for MacOS Ventura, Amazon Linux 2, and Amazon Linux 2023 operating systems.
+
 
 1. AWS account with Amazon Bedrock model access enabled for Anthropic - Claude, Anthropic - Claude Instant and Cohere - Embed Multilingual. Follow the steps in https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html#add-model-access to enable those models and make sure the region is correct.
 2. Make 3.82 or above in your environment
@@ -56,10 +59,6 @@ Here are prerequisites for deploying this solution with AWS CDK:
 9. CDK Toolkit 2.122.0 or above. Follow https://docs.aws.amazon.com/cdk/v2/guide/getting_started.html#getting_started_install for installation.
 10. Python CDK lib 2.122.0 or above with @aws-cdk/aws-amplify-alpha. Follow https://docs.aws.amazon.com/cdk/v2/guide/getting_started.html#getting_started_concepts
 11. CDK nag 2.28.16 or above.
-
-To automatically install item 4-11 of those prerequisites run. `make prepare`
-
-The `make prepare` utility is currently supported only for MacOS Ventura, Amazon Linux 2, and Amazon Linux 2023 operating systems.
 
 ### Deploy
 
