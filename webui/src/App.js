@@ -96,7 +96,8 @@ function App({ signOut, user }: WithAuthenticatorProps) {
                   bucketName={awsExports.bucket_name}
                   s3Client={s3Client}
                   bedrockClient={bedrockClient}
-                  modelId={awsExports.model_id}
+                  fastModelId={awsExports.fast_model_id}
+                  balancedModelId={awsExports.balanced_model_id}
                   rawFolder={awsExports.raw_folder}
                   summaryFolder={awsExports.summary_folder}
                   videoScriptFolder={awsExports.video_script_folder}

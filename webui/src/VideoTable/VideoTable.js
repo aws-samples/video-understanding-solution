@@ -5,6 +5,8 @@ import Collapse from 'react-bootstrap/Collapse';
 import Button from 'react-bootstrap/Button';
 import Form from 'react-bootstrap/Form';
 import InputGroup from 'react-bootstrap/InputGroup';
+import Dropdown from 'react-bootstrap/Dropdown';
+import DropdownButton from 'react-bootstrap/DropdownButton';
 import Pagination from 'react-bootstrap/Pagination';
 import Spinner from 'react-bootstrap/Spinner';
 import DatePicker from "react-datepicker";
@@ -22,6 +24,10 @@ import "react-datepicker/dist/react-datepicker.css";
 export class VideoTable extends Component {
   constructor(props) {
     super(props);
+
+    this.fastModelId= props.fastModelId
+    this.balancedModelId = props.balancedModelId
+
     this.state = {
       videos: [],
       pages: {},
@@ -31,11 +37,12 @@ export class VideoTable extends Component {
       searchByStartDate: null,
       searchByEndDate: null,
       searchByAboutText: "",
+      chatModelChoice: "Fastest" // as default
     };
+
     this.s3Client = props.s3Client
     this.bedrockClient = props.bedrockClient
     this.bucketName = props.bucketName
-    this.modelId = props.modelId
     this.rawFolder = props.rawFolder
     this.summaryFolder = props.summaryFolder
     this.transcriptionFolder = props.transcriptionFolder
@@ -119,6 +126,8 @@ export class VideoTable extends Component {
         chatSummary: "",
         chatLength: 0,
         chatWaiting: false,
+        findPartWaiting: false,
+        findPartResult: undefined,
         url: undefined
       })
     }
@@ -238,8 +247,8 @@ export class VideoTable extends Component {
   }
 
   handleChatInputChange(video, event) {
-    const chatText = event.target.value
     if(event.keyCode == 13 && !event.shiftKey) { // When Enter is pressed without Shift
+      const chatText = event.target.value
       video.chats.push({
         actor: "You",
         text: chatText
@@ -249,6 +258,76 @@ export class VideoTable extends Component {
       event.target.value = "" // Clear input field
       this.handleChat(video.index)
     }
+  }
+
+  async handleFindPartInputChange(video, event) {
+    if(event.keyCode == 13 && !event.shiftKey) { // When Enter is pressed without Shift
+      video.findPartWaiting = true
+      this.setState({videos: this.state.videos})
+
+      const findPartText = event.target.value
+      const part = await this.handleFindPart(video.index, findPartText)
+      if("error" in part){
+        video.findPartResult = "Part not found"
+        video.findPartWaiting = false
+        this.setState({videos: this.state.videos})
+      }else{
+        video.findPartResult = `Start at second ${part.start} and stop at second ${part.stop}`
+        video.findPartWaiting = false
+        this.setState({videos: this.state.videos})
+
+        if(!video.videoShown){ 
+          await this.showVideo(video)
+          await new Promise(r => setTimeout(r, 5000));
+        }
+        const videoElement = document.getElementById(`video-${video.index}-canvas`);
+        videoElement.currentTime = parseInt(part.start - 1);
+        await new Promise(r => setTimeout(r, 3000));
+        videoElement.scrollIntoView()
+      }
+
+      event.target.value = "" // Clear input field
+    }
+  }
+
+  async handleFindPart(videoIndex, findPartText){
+    var video = this.state.videos[videoIndex]
+    var systemPrompt = "You can find relevant part of a video given the text presentation of the video called <timeline>."
+
+    var prompt = ""
+    prompt += "Below is the <timeline> with information about the voice heard in the video, visual scenes seen, visual text visible, and any face or celebrity visible.\n"
+    prompt += "For voice, the same speaker number ALWAYS indicates the same person throughout the video.\n"
+    prompt += "For faces, while the estimated age may differ across timestamp, if they are very close, they can refer to the same person.\n"
+    prompt += "The numbers on the left represents the seconds into the video where the information was extracted.\n"
+    prompt += `<timeline>\n${video.videoScript}</timeline>\n\n`
+    prompt += "Now your job is to find the part of the video based on the <question>.\n"
+    prompt += "The answer MUST be expressed as the start and stop second of the relevant part.\n"
+    prompt += "The \"start\" MUST represents the earliest point of where the relevant part is. Start from the BEGINNING of the context that leads to the relevant part. It is okay to have some buffer for the \"start\" point.\n"
+    prompt += "The \"stop\" MUST represents the latest point of where the relevant part is. Do not put the \"stop\" in a way that it will stop the clip abruptly. Add some buffer so that the clip has full context.\n"
+    prompt += "ALWAYS answer in JSON format ONLY. For example:{\"start\":2.0,\"stop\":15.5}\n"
+    prompt += "If there is no relevant video part, return {\"error\":404}\n\n"
+    prompt += `<question>${findPartText}</question>\n\n`
+    prompt += "Your JSON ONLY answer:"
+
+    const input = { 
+      body: JSON.stringify({
+        anthropic_version: "bedrock-2023-05-31",    
+        system: systemPrompt,
+        messages: [
+            { role: "user", content: prompt},
+            { role: "assistant", content: "Here is my JSON only answer:"}
+        ],
+        temperature: 0.1,
+        max_tokens: 50
+      }), 
+      modelId: this.balancedModelId, 
+      contentType: "application/json",
+      accept: "application/json"
+    };
+    const response = await this.bedrockClient.send(new InvokeModelCommand(input));
+    const part = JSON.parse(JSON.parse(new TextDecoder().decode(response.body)).content[0].text.trim())
+
+    return part
   }
 
   renderChat(video) {
@@ -307,7 +386,7 @@ export class VideoTable extends Component {
         max_tokens: 1000,
         stop_sequences: ["\nUser:"]
       }), 
-      modelId: this.modelId, 
+      modelId: this.state.chatModelChoice == "Fastest" ? this.fastModelId : this.balancedModelId, 
       contentType: "application/json",
       accept: "application/json"
     };
@@ -399,7 +478,7 @@ export class VideoTable extends Component {
           max_tokens: 1000,
           stop_sequences: ["\nUser:"]
         }), 
-        modelId: this.modelId, 
+        modelId: this.state.chatModelChoice == "Fastest" ? this.fastModelId : this.balancedModelId, 
         contentType: "application/json",
         accept: "application/json"
       };
@@ -472,6 +551,10 @@ export class VideoTable extends Component {
     };
   }
 
+  async handleChatModelPicker(event){
+    this.setState({chatModelChoice: event})
+  }
+
   async removeChatWaitingSpinner(video){
     video.chatWaiting = false
     this.setState({videos: this.state.videos})
@@ -519,7 +602,7 @@ export class VideoTable extends Component {
         max_tokens: Math.round(this.maxCharactersForChat/this.estimatedCharactersPerToken),
         stop_sequences: ["\nUser:", "\nYou:"]
       }), 
-      modelId: this.modelId, 
+      modelId: this.fastModelId, 
       contentType: "application/json",
       accept: "application/json"
     };
@@ -576,7 +659,7 @@ export class VideoTable extends Component {
             <Accordion.Body>
               <Row>
                 <Col>
-                  { !video.videoShown ? <Button variant="info" size="sm" onClick={this.showVideo.bind(this,video)}>Show video</Button> : <video width="100%" controls><source src={video.url} type="video/mp4" /></video> }
+                  { !video.videoShown ? <Button variant="info" size="sm" onClick={this.showVideo.bind(this,video)}>Show video</Button> : <video id={("video-" + video.index + "-canvas")} width="100%" controls><source src={video.url} type="video/mp4" /></video> }
                 </Col>
               </Row>
               <Row>
@@ -599,15 +682,50 @@ export class VideoTable extends Component {
                     {this.renderChat(video)}
                     { video.chatWaiting ? <Row><Col><Spinner className="chat-spinner" size="sm" animation="grow" variant="info" role="status"><span className="visually-hidden">Thinking ...</span></Spinner></Col></Row> : "" }
                   <Row><Col>
-                    <Form.Control
-                      type="text"
-                      id={("video-" + video.index + "-chat-input")}
-                      placeholder="e.g. Why is this video funny or interesting?"
-                      onKeyDown={this.handleChatInputChange.bind(this, video)}
-                      disabled={ video.chatWaiting ? true : false }
-                    />
-                    <Form.Text id={("video-" + video.index + "-chat-input")} ></Form.Text>
+                    <InputGroup className="mb-3">
+                      <Form.Control
+                        type="text"
+                        id={("video-" + video.index + "-chat-input")}
+                        placeholder="e.g. Why is this video funny or interesting?"
+                        onKeyDown={this.handleChatInputChange.bind(this, video)}
+                        disabled={ video.chatWaiting ? true : false }
+                      />
+                      <Form.Text id={("video-" + video.index + "-chat-input")} ></Form.Text>
+                      <DropdownButton
+                        variant="outline-secondary"
+                        title={`${this.state.chatModelChoice}`}
+                        id={`video-${video.index}-chat-model-picker`}
+                        onSelect={this.handleChatModelPicker.bind(this)}
+                      >
+                        <Dropdown.Item eventKey='Fastest' >Fastest</Dropdown.Item>
+                        <Dropdown.Item eventKey='Balanced' >Balanced</Dropdown.Item>
+                        <Dropdown.Item eventKey='Smartest' disabled >Smartest</Dropdown.Item>
+                      </DropdownButton>
+                    </InputGroup>
+                    <br/>
                   </Col></Row>
+                </Col>
+              </Row>
+              <Row>
+                <Col className={(video.loaded && typeof video.videoScript !== "undefined" ) ? "" : "d-none"}>
+                  <Row><Col><h5 align="left">Find video part:</h5></Col></Row>
+                  <Row>
+                    <Col>
+                      <InputGroup className="mb-3">
+                        <InputGroup.Text id="basic-addon1">Show me where </InputGroup.Text>
+                        <Form.Control
+                          type="text"
+                          id={("video-" + video.index + "-find-part-input")}
+                          placeholder="e.g. the speaker says thank you"
+                          onKeyDown={this.handleFindPartInputChange.bind(this, video)}
+                          disabled={ video.findPartWaiting ? true : false }
+                        />
+                        <Form.Text id={("video-" + video.index + "-chat-input")} ></Form.Text>
+                      </InputGroup>
+                    </Col>
+                    <Col className="find-part-result">{(typeof video.findPartResult !== "undefined") ? <Form.Label>{video.findPartResult}</Form.Label> : "" }</Col>
+                  </Row>
+                  { video.findPartWaiting ? <Row><Col><Spinner className="chat-spinner" size="sm" animation="grow" variant="info" role="status"><span className="visually-hidden">Thinking ...</span></Spinner></Col></Row> : "" }
                 </Col>
               </Row>
             </Accordion.Body>
