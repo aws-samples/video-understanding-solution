@@ -32,7 +32,8 @@ from cdk_nag import AwsSolutionsChecks, NagSuppressions
 model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
 vqa_model_id = "anthropic.claude-3-haiku-20240307-v1:0"
 frame_interval = "1000" # milliseconds
-chat_model_id = "anthropic.claude-instant-v1"
+fast_model_id = "anthropic.claude-3-haiku-20240307-v1:0"
+balanced_model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
 embedding_model_id = "cohere.embed-multilingual-v3"
 raw_folder = "source"
 summary_folder = "summary"
@@ -669,6 +670,14 @@ class VideoUnderstandingSolutionStack(Stack):
             tracing_enabled=True
         )
 
+        # The below added policy is needed because the default policy auto-created does not have the task revision portion in the resource ARN
+        ecs_run_task_policy = _iam.PolicyStatement(
+            actions=["ecs:RunTask"],
+            resources=[analyzer_task_definition.task_definition_arn],
+            effect=_iam.Effect.ALLOW,
+        )
+        video_analysis_sfn.add_to_role_policy(ecs_run_task_policy)
+
         # Suppress cdk_nag rule for using * in IAM since the file name of the videos on S3 can be various.
         NagSuppressions.add_resource_suppressions(video_analysis_sfn, [
             { "id": 'AwsSolutions-IAM5', "reason": 'This is providing access to videos on S3 for AWS AI services and since the file name can vary, we need <Arn>/* in the IAM policy.'}
@@ -1035,7 +1044,8 @@ class VideoUnderstandingSolutionStack(Stack):
                 "REGION": aws_region,
                 "AMPLIFY_IDENTITYPOOL_ID": identity_pool.ref,
                 "BUCKET_NAME": video_bucket_s3.bucket_name,
-                "MODEL_ID": chat_model_id,
+                "FAST_MODEL_ID": fast_model_id,
+                "BALANCED_MODEL_ID": balanced_model_id,
                 "RAW_FOLDER": raw_folder,
                 "VIDEO_SCRIPT_FOLDER": video_script_folder,
                 "VIDEO_CAPTION_FOLDER": video_caption_folder,
