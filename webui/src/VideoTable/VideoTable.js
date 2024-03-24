@@ -281,7 +281,7 @@ export class VideoTable extends Component {
           await new Promise(r => setTimeout(r, 5000));
         }
         const videoElement = document.getElementById(`video-${video.index}-canvas`);
-        videoElement.currentTime = parseInt(part.start - 1);
+        videoElement.currentTime = parseInt(part.start);
         await new Promise(r => setTimeout(r, 3000));
         videoElement.scrollIntoView()
       }

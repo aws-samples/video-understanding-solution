@@ -725,9 +725,7 @@ class VideoUnderstandingSolutionStack(Stack):
                 ),
             ),
             self_sign_up_enabled=False,
-            sign_in_aliases= _cognito.SignInAliases(
-                email=True,
-            ),                         
+            sign_in_aliases= _cognito.SignInAliases(email=True),     
             removal_policy=RemovalPolicy.DESTROY,
             mfa=_cognito.Mfa.REQUIRED,
             mfa_second_factor=_cognito.MfaSecondFactor(

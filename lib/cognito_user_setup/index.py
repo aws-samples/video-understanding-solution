@@ -62,7 +62,7 @@ def on_update(event):
     props = event["ResourceProperties"]
     print(f"no op")
 
-    return {"PhysicalResourceId": physical_id}
+    return {"PhysicalResourceId": "admincognitouser"}
 
 def on_delete(event):
     props = event["ResourceProperties"]

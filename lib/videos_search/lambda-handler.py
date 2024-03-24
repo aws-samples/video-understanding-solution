@@ -84,9 +84,7 @@ def handler(event, context):
         videos = videos.filter(Videos.summary_embedding.cosine_distance(about_embedding) < acceptable_embedding_distance)
         videos = videos.order_by(Videos.summary_embedding.cosine_distance(about_embedding))
     
-    if uploaded_between is not None:
-        videos = videos.order_by(Videos.uploaded_at.desc())
-
+    videos = videos.order_by(Videos.uploaded_at.desc())
 
     if video_name_contains is not None:
        videos = videos.params(name=f"%{video_name_contains}%")
