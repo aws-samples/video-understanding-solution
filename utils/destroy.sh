@@ -7,7 +7,7 @@ fi
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 
-nvm use 20.0.0 || nvm use 16.0.0
+nvm use 20.10.0 || nvm use 16.20.2
 node -e "console.log('Currently running Node.js ' + process.version)"
 
 account=$(aws sts get-caller-identity | jq -r '.Account')
