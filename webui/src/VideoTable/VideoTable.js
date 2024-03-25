@@ -21,6 +21,8 @@ import Col from 'react-bootstrap/Col';
 import './VideoTable.css';
 import "react-datepicker/dist/react-datepicker.css";
 
+import { captionManager } from './Caption';
+
 export class VideoTable extends Component {
   constructor(props) {
     super(props);
@@ -225,6 +227,28 @@ export class VideoTable extends Component {
     video.loaded = true
 
     return video
+  }
+
+  async toggleCaption(video) {
+    
+
+    const button = document.getElementById('toggleCaption-' + video.index);
+
+    // Check the current text of the button and toggle it
+    if (button.innerText === "Turn Caption On") {
+      button.innerText = "Turn Caption Off";
+      captionManager.killbarrager = false;
+    } else {
+      button.innerText = "Turn Caption On";
+      captionManager.killbarrager = true;
+    }
+
+    var videoElements = document.getElementsByTagName('video');
+    for (var i = 0; i < videoElements.length; i++) {
+        if (videoElements[i].id == "video-" + video.index.toString() + "-canvas") {
+          captionManager.onload(videoElements[i], video)
+        }
+    }
   }
 
   async showVideo(video){
@@ -659,7 +683,16 @@ export class VideoTable extends Component {
             <Accordion.Body>
               <Row>
                 <Col>
-                  { !video.videoShown ? <Button variant="info" size="sm" onClick={this.showVideo.bind(this,video)}>Show video</Button> : <video id={("video-" + video.index + "-canvas")} width="100%" controls><source src={video.url} type="video/mp4" /></video> }
+                  { !video.videoShown ? <Button variant="info" size="sm" onClick={this.showVideo.bind(this,video)}>Show video</Button> : 
+                  <div className="video">
+                    <video id={("video-" + video.index + "-canvas")} width="100%" controls><source src={video.url} type="video/mp4" />
+                    </video>
+                  </div> }
+                </Col>
+              </Row>
+              <Row>
+                <Col>
+                  { !video.videoShown ? "" : <Button id={("toggleCaption-" + video.index)} variant="info" size="sm" onClick={this.toggleCaption.bind(this, video)}>Turn Caption On</Button> }
                 </Col>
               </Row>
               <Row>
