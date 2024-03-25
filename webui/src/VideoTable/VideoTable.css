@@ -21,13 +21,3 @@
     text-align:left; 
     margin-top:5px
 }
-.video{
-    position: relative;
-	cursor: pointer;
-}
-.overlay{
-    position: absolute; 
-    top: 238px; 
-    right: 80px; 
-    color: yellow;
-}
