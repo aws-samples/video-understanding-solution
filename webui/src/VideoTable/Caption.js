@@ -96,7 +96,6 @@ function barragerStart(index, player, curtime, height, barragers){
 	const colors = ["red", "yellow", "blue", "green"];
 	var hi = parseInt(height);
 	var container = player.parentElement;
-	var container = document.getElementsByClassName('video')[index];
 	for(var i in barragers){
 		if(barragers[i].time - curtime > -0.125 && barragers[i].time - curtime < 0.125){
 			// emission
