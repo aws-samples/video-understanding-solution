@@ -10,6 +10,7 @@ from aws_cdk import (
     aws_events as _events,
     aws_events_targets as _events_targets,
     aws_lambda as _lambda,
+    aws_lambda_nodejs as _lambdanode,
     aws_apigateway as _apigw,
     aws_apigatewayv2 as _apigw2,
     aws_ecs as _ecs,
@@ -27,6 +28,8 @@ from constructs import Construct
 from aws_cdk.custom_resources import Provider
 from aws_cdk.aws_ecr_assets import DockerImageAsset
 from cdk_nag import AwsSolutionsChecks, NagSuppressions
+from aws_cdk.aws_apigatewayv2_integrations import WebSocketLambdaIntegration
+from aws_cdk.aws_apigatewayv2_authorizers import WebSocketLambdaAuthorizer
 
 
 model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
@@ -988,27 +991,65 @@ class VideoUnderstandingSolutionStack(Stack):
             request_validator=videos_search_request_validator
         )
 
-        """
+        ## Chat and video APIs
+
+        # Define the Auth Lambda function for WS API
+        ws_auth_handler = _lambdanode.NodejsFunction(self, f'WSAuthLambda',
+            entry= "./lib/ws_api_auth_lambda/index.ts",
+            runtime=_lambda.Runtime.NODEJS_18_X,
+            timeout=Duration.minutes(3),
+            environment = {
+                'USER_POOL_ID': user_pool.user_pool_id,
+                'APP_CLIENT_ID': user_pool_client.user_pool_client_id,
+            },
+            bundling=_lambdanode.BundlingOptions(
+                minify= False
+            )
+        )
+
+        # Define the main route handler Lambda function for WS API
+        ws_message_handler = _lambda.Function(self, f'WSHandlerLambda',
+           handler='lambda-handler.handler',
+           runtime=_lambda.Runtime.PYTHON_3_12,
+           code=_lambda.Code.from_asset('./lib/ws_api_message_lambda') 
+           timeout=Duration.minutes(15)
+        )
+        
+        # Add permission to access Bedrock to the Lambda function
+        statement = iam.PolicyStatement()
+        statement.add_actions("bedrock:InvokeModel")
+        statement.add_resources("*")
+        ws_message_handler.add_to_role_policy(statement)
+        
+        # Add permission to send @connections as a response back to API Gateway WebSocket
+        statement = iam.PolicyStatement()
+        statement.add_actions("execute-api:ManageConnections")
+        statement.add_resources(f"arn:aws:execute-api:{aws_region}:{aws_account_id}:{ws_api.api_id}/*")
+        ws_message_handler.add_to_role_policy(statement)
+
         # API Gateway WebSocket
-        ws_api = _apigw2.CfnApi(self, "WebSocketAPI",
-            name=f"{construct_id}-ws-api",
-            protocol_type="WEBSOCKET",
+        ws_api = _apigw2.WebSocketApi(self, "WebSocketAPI",
+            connect_route_options=_apigw2.WebSocketRouteOptions(
+                authorizer=WebSocketLambdaAuthorizer(
+                    authorizer_nam="ConnectAuth", 
+                    handler=ws_auth_handler,
+                    identity_source=["route.request.querystring.idToken"])
+            ),
             route_selection_expression="$request.body.action"
         )
-        self.ws_api = ws_api
-        self.ws_api_endpoint = ws_api.attr_api_endpoint
-        
-        connect_route_key = "$connect"
-        
-        ws_connect_route = _apigw2.CfnRoute(self, "ConnectRoute",
-            api_id=ws_api.attr_api_id,
-            route_key=connect_route_key,
-            authorization_type="AWS_IAM",
-            operation_name="ConnectRoute"
+
+        ws_api.add_route("sendMessage",
+            integration=WebSocketLambdaIntegration("SendMessageIntegration", ws_message_handler)
         )
-        """
 
+        ws_api_stage = _apigw2.WebSocketStage(self, "WebSocketAPIStage",
+            web_socket_api=ws_api,
+            stage_name="dev",
+            auto_deploy=True
+        )
 
+        self.ws_api = ws_api
+        self.ws_api_endpoint = ws_api.api_endpoint
 
         # CodeCommit repo
         repo_name = f"video-understanding-{int(time.time())}"
