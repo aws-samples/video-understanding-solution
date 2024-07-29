@@ -74,7 +74,6 @@ class Database():
         cur.close()
         return True
     
-db = Database(writer=writer_endpoint, database_name = database_name, embedding_dimension = embedding_dimension)
 def on_event(event, context):
     request_type = event['RequestType'].lower()
     if request_type == 'create':
@@ -88,6 +87,7 @@ def on_event(event, context):
 
 def on_create(event):
     try:
+        db = Database(writer=writer_endpoint, database_name = database_name, embedding_dimension = embedding_dimension)
         db.setup_vector_db(embedding_dimension)
         db.close_connection()
     except Exception as e:
