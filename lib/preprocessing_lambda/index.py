@@ -6,17 +6,20 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import mapped_column, sessionmaker
 from sqlalchemy.sql import bindparam
 from sqlalchemy.dialects.postgresql import insert as db_insert
-
-
 from pgvector.sqlalchemy import Vector
 
 database_name = os.environ['DATABASE_NAME']
 video_table_name = os.environ['VIDEO_TABLE_NAME']
 secret_name = os.environ['SECRET_NAME']
+configuration_parameter_name = os.environ['CONFIGURATION_PARAMETER_NAME']
 writer_endpoint = os.environ['DB_WRITER_ENDPOINT']
 embedding_dimension = os.environ['EMBEDDING_DIMENSION']
+CONFIG_LABEL_DETECTION_ENABLED = "label_detection_enabled"
+CONFIG_TRANSCRIPTION_ENABLED = "transcription_enabled"
 
+ssm = boto3.client('ssm')
 secrets_manager = boto3.client('secretsmanager')
+
 credentials = json.loads(secrets_manager.get_secret_value(SecretId=secret_name)["SecretString"])
 username = credentials["username"]
 password = credentials["password"]
@@ -64,6 +67,13 @@ def handler(event, context):
         }
     )
 
+
+    configuration_parameter_json = ssm.get_parameter(
+        Name=configuration_parameter_name
+    )['Parameter']['Value']
+    configuration_parameter = json.loads(configuration_parameter_json)
+
+
     with session.begin():
         date_now = datetime.now(timezone.utc)
         session.execute(upsert, {
@@ -74,5 +84,9 @@ def handler(event, context):
 
     return {
         'statusCode': 200,
-        'body': {"preprocessing": "success"}
+        'body': {
+            "preprocessing": "success",
+            CONFIG_LABEL_DETECTION_ENABLED:configuration_parameter[CONFIG_LABEL_DETECTION_ENABLED],
+            CONFIG_TRANSCRIPTION_ENABLED:configuration_parameter[CONFIG_TRANSCRIPTION_ENABLED]
+        }
     }

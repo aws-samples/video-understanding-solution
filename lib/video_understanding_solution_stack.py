@@ -14,6 +14,7 @@ from aws_cdk import (
     aws_apigatewayv2 as _apigw2,
     aws_ecs as _ecs,
     aws_logs as _logs,
+    aws_ssm as _ssm,
     aws_stepfunctions as _sfn,
     aws_stepfunctions_tasks as _sfn_tasks,
     aws_codecommit as _codecommit,
@@ -52,6 +53,8 @@ videos_api_resource = "videos"
 visual_objects_detection_confidence_threshold = 30.0
 
 BASE_DIR = os.getcwd()
+CONFIG_LABEL_DETECTION_ENABLED = "label_detection_enabled" # Value is "1" or "0"
+CONFIG_TRANSCRIPTION_ENABLED = "transcription_enabled" # Value is "1" or "0"
 
 class VideoUnderstandingSolutionStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
@@ -92,6 +95,18 @@ class VideoUnderstandingSolutionStack(Stack):
         vpc.add_flow_log("FlowLogS3")
         private_subnets =  _ec2.SubnetSelection(subnet_type=_ec2.SubnetType.PRIVATE_ISOLATED)
         private_with_egress_subnets = _ec2.SubnetSelection(subnet_type=_ec2.SubnetType.PRIVATE_WITH_EGRESS)
+
+        # Parameter store for storing application configuration
+        default_configuration_parameters = {
+            CONFIG_LABEL_DETECTION_ENABLED: "1",
+            CONFIG_TRANSCRIPTION_ENABLED: "1"
+        }
+        default_configuration_parameters_json = json.dumps(default_configuration_parameters)
+        configuration_parameters_ssm = _ssm.StringParameter(self, f"{construct_id}-configuration-parameters",
+            parameter_name = f"{construct_id}-configuration",
+            string_value = default_configuration_parameters_json
+        )
+
 
         # S3 - Video bucket
         video_bucket_s3 = _s3.Bucket(
@@ -310,15 +325,20 @@ class VideoUnderstandingSolutionStack(Stack):
             role_name=f"{construct_id}-{aws_region}-preprocessing-lambda",
             assumed_by=_iam.ServicePrincipal("lambda.amazonaws.com"),
             inline_policies={
-                "PeprocessingLambdaPolicy": _iam.PolicyDocument(
+                "PreprocessingLambdaPolicy": _iam.PolicyDocument(
                     statements=[
                         _iam.PolicyStatement(
                             actions=["secretsmanager:GetSecretValue"],
                             resources=[aurora_cluster_secret.secret_full_arn],
                             effect=_iam.Effect.ALLOW,
                         ),
+                        _iam.PolicyStatement(
+                            actions=["ssm:GetParameter"],
+                            resources=[configuration_parameters_ssm.parameter_arn],
+                            effect=_iam.Effect.ALLOW
+                        )
                     ]
-                )
+                ),
             },
             managed_policies=[
                 _iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSLambdaBasicExecutionRole"),
@@ -357,6 +377,7 @@ class VideoUnderstandingSolutionStack(Stack):
                 'DATABASE_NAME': database_name,
                 'VIDEO_TABLE_NAME': video_table_name,
                 'SECRET_NAME': self.db_secret_name,
+                'CONFIGURATION_PARAMETER_NAME': configuration_parameters_ssm.parameter_name,
                 'EMBEDDING_DIMENSION': str(embedding_dimension)
             }
         )
@@ -477,7 +498,7 @@ class VideoUnderstandingSolutionStack(Stack):
         )
 
         transcription_success = _sfn.Succeed(self, "Transcription is successful")
-        transcription_failure = _sfn.Fail(self, "Transcription is failed")
+        transcription_failure = _sfn.Pass(self, "Transcription is failed, but continuing anyway.")
         transcription_choice = _sfn.Choice(self, "Transcription choice")
         transcription_success_condition = _sfn.Condition.string_equals("$.transcriptionResult.TranscriptionJobStatus", "COMPLETED")
         transcription_failure_condition = _sfn.Condition.string_equals("$.transcriptionResult.TranscriptionJobStatus", "FAILED")
@@ -489,10 +510,11 @@ class VideoUnderstandingSolutionStack(Stack):
 
         # Define the parallel tasks for Rekognition and Transcribe.
         parallel_sfn = _sfn.Parallel(self, "StartVideoAnalysisParallelSfn")
-        parallel_sfn = parallel_sfn.branch(
-            start_rekognition_label_detection_sfn_task,
-            start_transcription_job_sfn_task,
-        )
+
+        if _sfn.Condition.string_equals(f"$.preprocessingResult.Payload.body.{CONFIG_LABEL_DETECTION_ENABLED}", "1"):
+            parallel_sfn = parallel_sfn.branch(start_rekognition_label_detection_sfn_task)
+        if _sfn.Condition.string_equals(f"$.preprocessingResult.Payload.body.{CONFIG_TRANSCRIPTION_ENABLED}", "1"):
+            parallel_sfn = parallel_sfn.branch(start_transcription_job_sfn_task)
 
         # Chain parallel task after preprocessing lambda
         preprocessing_task.next(parallel_sfn)
@@ -630,6 +652,8 @@ class VideoUnderstandingSolutionStack(Stack):
                     _sfn_tasks.TaskEnvironmentVariable(name="VIDEO_S3_PATH", value=_sfn.JsonPath.string_at("$[0].videoS3Path")),
                     _sfn_tasks.TaskEnvironmentVariable(name="LABEL_DETECTION_JOB_ID", value=_sfn.JsonPath.string_at("$[0].labelDetectionResult.JobId")),
                     _sfn_tasks.TaskEnvironmentVariable(name="TRANSCRIPTION_JOB_NAME", value=_sfn.JsonPath.string_at("$[1].transcriptionResult.TranscriptionJobName")),
+                    _sfn_tasks.TaskEnvironmentVariable(name=CONFIG_LABEL_DETECTION_ENABLED, value=_sfn.JsonPath.string_at(f"$[0].preprocessingResult.Payload.body.{CONFIG_LABEL_DETECTION_ENABLED}")),
+                    _sfn_tasks.TaskEnvironmentVariable(name=CONFIG_TRANSCRIPTION_ENABLED, value=_sfn.JsonPath.string_at(f"$[0].preprocessingResult.Payload.body.{CONFIG_TRANSCRIPTION_ENABLED}")),
                     _sfn_tasks.TaskEnvironmentVariable(name='DATABASE_NAME', value= database_name),
                     _sfn_tasks.TaskEnvironmentVariable(name='VIDEO_TABLE_NAME', value= video_table_name),
                     _sfn_tasks.TaskEnvironmentVariable(name='ENTITIES_TABLE_NAME', value= entities_table_name),

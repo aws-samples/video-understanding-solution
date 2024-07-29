@@ -12,6 +12,9 @@ from PIL import Image
 import concurrent.futures
 from multiprocessing import Pool
 
+CONFIG_LABEL_DETECTION_ENABLED = "label_detection_enabled"
+CONFIG_TRANSCRIPTION_ENABLED = "transcription_enabled"
+
 secrets_manager = boto3.client('secretsmanager')
 
 model_id = os.environ["MODEL_ID"]
@@ -37,6 +40,8 @@ writer_endpoint = os.environ['DB_WRITER_ENDPOINT']
 video_s3_path = os.environ['VIDEO_S3_PATH'] 
 transcription_job_name = os.environ['TRANSCRIPTION_JOB_NAME']
 label_detection_job_id = os.environ['LABEL_DETECTION_JOB_ID']
+label_detection_enabled = os.environ[CONFIG_LABEL_DETECTION_ENABLED] 
+transcription_enabled = os.environ[CONFIG_TRANSCRIPTION_ENABLED] 
 
 
 credentials = json.loads(secrets_manager.get_secret_value(SecretId=secret_name)["SecretString"])
@@ -58,9 +63,10 @@ class CelebrityFinding():
     def __init__(self, celebrity_dict: dict):
         self.name: str = celebrity_dict['Name']
         self.match_confidence: int = int(celebrity_dict['MatchConfidence'])
-        self.smile: bool = bool(celebrity_dict['Face']['Smile']['Value'])
-        self.smile_confidence: int = int(celebrity_dict['Face']['Smile']['Confidence'])
-        self.emotions: list[str] = list(filter(lambda em: (len(em) > 0),[emo['Type'].lower() if int(emo['Confidence']) >= self.celebrity_emotion_confidence_threshold else '' for emo in celebrity_dict['Face']['Emotions']]))
+        # These emotion related attributes were disabled on July 29, 2024 to respect this AUP https://www.anthropic.com/legal/aup
+        #self.smile: bool = bool(celebrity_dict['Face']['Smile']['Value'])
+        #self.smile_confidence: int = int(celebrity_dict['Face']['Smile']['Confidence'])
+        #self.emotions: list[str] = list(filter(lambda em: (len(em) > 0),[emo['Type'].lower() if int(emo['Confidence']) >= self.celebrity_emotion_confidence_threshold else '' for emo in celebrity_dict['Face']['Emotions']]))
         self.top: float = float(celebrity_dict['Face']['BoundingBox']['Top'])
         self.top_display: str = str(round(self.top, 2))
         self.left: float = float(celebrity_dict['Face']['BoundingBox']['Left'])
@@ -80,10 +86,11 @@ class CelebrityFinding():
 
     def display(self) -> str:
         display_string = f"Name is {self.name}. "
-        if len(self.emotions) > 0:
-            display_string += "Emotions appear to be " + ", ".join(self.emotions) + ". "
-        if self.smile_confidence >= self.celebrity_feature_confidence_threshold: 
-            display_string += "The celebrity is smiling. " if self.smile else "The celebrity is not smiling at this moment. "
+        # These emotion related attributes were disabled on July 29, 2024 to respect this AUP https://www.anthropic.com/legal/aup
+        #if len(self.emotions) > 0:
+        #    display_string += "Emotions appear to be " + ", ".join(self.emotions) + ". "
+        #if self.smile_confidence >= self.celebrity_feature_confidence_threshold: 
+        #    display_string += "The celebrity is smiling. " if self.smile else "The celebrity is not smiling at this moment. "
         display_string += f"The celeb's face is located at {self.left_display} of frame's width from left and {self.top_display} of frame's height from top, with face height of {self.height_display} of frame's height and face width of {self.width_display} of the frame's width. "
 
         return display_string
@@ -114,15 +121,17 @@ class FaceFinding():
         self.eyesopen_confidence: int = int(face_dict['EyesOpen']['Confidence'])
         self.sunglasses: bool = bool(face_dict['Sunglasses']['Value'])
         self.sunglasses_confidence: int = int(face_dict['Sunglasses']['Confidence'])
-        self.smile: bool = bool(face_dict['Smile']['Value'])
-        self.smile_confidence: int = int(face_dict['Smile']['Confidence'])
+        # These emotion related attributes were disabled on July 29, 2024 to respect this AUP https://www.anthropic.com/legal/aup
+        #self.smile: bool = bool(face_dict['Smile']['Value'])
+        #self.smile_confidence: int = int(face_dict['Smile']['Confidence'])
         self.mouthopen: bool = bool(face_dict['MouthOpen']['Value'])
         self.mouthopen_confidence: int = int(face_dict['MouthOpen']['Confidence'])
         self.mustache: bool = bool(face_dict['Mustache']['Value'])
         self.mustache_confidence: int = int(face_dict['Mustache']['Confidence'])
         self.gender: str = str(face_dict['Gender']['Value']).lower()
         self.gender_confidence: int = int(face_dict['Gender']['Confidence'])
-        self.emotions: list[str] = list(filter(lambda em: (len(em) > 0),[emo['Type'].lower() if int(emo['Confidence']) >= self.face_emotion_confidence_threshold else '' for emo in face_dict['Emotions']]))
+        # This emotion related attributes were disabled on July 29, 2024 to respect this AUP https://www.anthropic.com/legal/aup
+        #self.emotions: list[str] = list(filter(lambda em: (len(em) > 0),[emo['Type'].lower() if int(emo['Confidence']) >= self.face_emotion_confidence_threshold else '' for emo in face_dict['Emotions']]))
 
     def is_duplicate(self, face_list: list[Self]) -> bool:
         found = False
@@ -135,10 +144,11 @@ class FaceFinding():
         display_string = f"The person is about {self.age_low} to {self.age_high} years old. "
         if self.gender_confidence >= self.face_feature_confidence_threshold:
             display_string += f"Identifed gender is {self.gender}. "
-        if len(self.emotions) > 0:
-            display_string += "Emotion appears to be " + ", ".join(self.emotions) + ". "
-        if self.smile_confidence >= self.face_feature_confidence_threshold:
-            display_string += "Seems to be smiling. " if self.smile else "Seems to be not smiling. "
+        # These emotion related attributes were disabled on July 29, 2024 to respect this AUP https://www.anthropic.com/legal/aup
+        #if len(self.emotions) > 0:
+        #    display_string += "Emotion appears to be " + ", ".join(self.emotions) + ". "
+        #if self.smile_confidence >= self.face_feature_confidence_threshold:
+        #    display_string += "Seems to be smiling. " if self.smile else "Seems to be not smiling. "
         if self.beard_confidence >= self.face_feature_confidence_threshold:
             display_string += "Person has beard. " if self.beard else "Person has no beard. "
         if self.mustache_confidence >= self.face_feature_confidence_threshold:
@@ -189,7 +199,7 @@ class VideoPreprocessor(ABC):
         self.visual_scenes: dict[int, str] = {}
         self.visual_captions: dict[int, str] = {}
         self.visual_texts: dict[int, list[str]] = {}
-        self.transcript: dict
+        self.transcript: dict = {}
         self.celebrities: dict[int, list[CelebrityFinding]] = {}
         self.faces: dict[int, list[FaceFinding]] = {}
         self.person_timestamps_millis: list[int] = []
@@ -214,7 +224,8 @@ class VideoPreprocessor(ABC):
 
     def wait_for_transcription_job(self):
         get_transcription = self.transcribe_client.get_transcription_job(TranscriptionJobName=self.transcription_job_name)
-        while(get_transcription["TranscriptionJob"]["TranscriptionJobStatus"] == 'IN_PROGRESS'):
+        job_status = get_transcription["TranscriptionJob"]["TranscriptionJobStatus"]
+        while(job_status == 'IN_PROGRESS' or job_status == "QUEUED"):
             time.sleep(5)
             get_transcription = self.transcribe_client.get_transcription_job(TranscriptionJobName=self.transcription_job_name)
     
@@ -273,6 +284,9 @@ class VideoPreprocessor(ABC):
             self.extract_visual_objects(get_object_detection_result)
 
     def fetch_transcription(self) -> dict:
+        get_transcription = self.transcribe_client.get_transcription_job(TranscriptionJobName=self.transcription_job_name)
+        if get_transcription["TranscriptionJob"]["TranscriptionJobStatus"] == "FAILED": return # In case the job failed, just skip this channel.
+
         video_transcription_file: dict = self.s3_client.get_object(Bucket=self.bucket_name, Key=self.video_transcript_s3_path)
         self.transcript = json.loads(video_transcription_file['Body'].read().decode('utf-8'))
 
@@ -451,16 +465,21 @@ class VideoPreprocessor(ABC):
             executor.map(self._extract_scene_from_vqa, self.frame_bytes)
     
     def wait_for_dependencies(self):
-        self.wait_for_rekognition_label_detection(sort_by="TIMESTAMP")
-        self.wait_for_transcription_job()
+        if label_detection_enabled:
+            self.wait_for_rekognition_label_detection(sort_by="TIMESTAMP")
+        if transcription_enabled:
+            self.wait_for_transcription_job()
 
     def run(self):
         self.download_video_and_load_metadata()
-        self.iterate_object_detection_result()
+        if label_detection_enabled:
+            self.iterate_object_detection_result()
         self.extract_frames()
-        self.detect_faces_and_celebrities()
+        if label_detection_enabled:
+            self.detect_faces_and_celebrities()
         self.extract_scenes_from_vqa()
-        self.fetch_transcription()
+        if transcription_enabled:
+            self.fetch_transcription()
         return self.visual_objects, self.visual_scenes, self.visual_captions, self.visual_texts, self.transcript, self.celebrities, self.faces
 
 class VideoPreprocessorBedrockVQA(VideoPreprocessor):
@@ -659,29 +678,30 @@ class VideoAnalyzer(ABC):
     def preprocess_transcript(self):
         transcript= dict()
         previous_millis: int = 0
-        for item in self.original_transcript["results"]["items"]:
-            if item['type'] == 'punctuation':
-                current_millis = previous_millis + 1 # Just add 1 millisecond to avoid this punctuation replaces the previous word.
-                transcript[current_millis] = item['alternatives'][0]['content']
-            else:
-                try:
-                    time_millis: int = int(float(item['start_time'])*1000) # In millisecond
-                    content: str = ""
-                    
-                    if "speaker_label" in item:
-                        match = re.search(r"spk_(\d+)", item['speaker_label'])
-                        speaker_number = int(match.group(1)) + 1 # So that it starts from 1, not 0
-                        content += f" Speaker {speaker_number} "
-                    if "language_code" in item:
-                        content += f"in {item['language_code']}"
+        if "results" in original_transcript and "items" in original_transcript['results']:
+            for item in self.original_transcript["results"]["items"]:
+                if item['type'] == 'punctuation':
+                    current_millis = previous_millis + 1 # Just add 1 millisecond to avoid this punctuation replaces the previous word.
+                    transcript[current_millis] = item['alternatives'][0]['content']
+                else:
+                    try:
+                        time_millis: int = int(float(item['start_time'])*1000) # In millisecond
+                        content: str = ""
+                        
+                        if "speaker_label" in item:
+                            match = re.search(r"spk_(\d+)", item['speaker_label'])
+                            speaker_number = int(match.group(1)) + 1 # So that it starts from 1, not 0
+                            content += f" Speaker {speaker_number} "
+                        if "language_code" in item:
+                            content += f"in {item['language_code']}"
 
-                    content += f": {item['alternatives'][0]['content']}"
+                        content += f": {item['alternatives'][0]['content']}"
 
-                    transcript[time_millis] = content
-                    previous_millis = time_millis
-                except Exception as e:
-                    print("Error in transcribing") 
-                    raise e
+                        transcript[time_millis] = content
+                        previous_millis = time_millis
+                    except Exception as e:
+                        print("Error in transcribing") 
+                        raise e
 
         self.transcript = sorted(transcript.items())
 
@@ -758,22 +778,23 @@ class VideoAnalyzer(ABC):
   
     def get_language_code(self):
         get_transcription = self.transcribe_client.get_transcription_job(TranscriptionJobName=self.transcription_job_name)
-        language_code: str = 'en-US'
-        language_code_validity_duration_threshold: float = 2.0
+        language_code: str = 'en'
+        language_code_validity_duration_threshold: float = 2.0 # Only consider the language code as valid if the speech is longer than 2 seconds, otherwise it might be invalid data.
         
-        if "LanguageCodes" in get_transcription["TranscriptionJob"]:
+        if "LanguageCodes" in get_transcription["TranscriptionJob"] and get_transcription["TranscriptionJob"]["TranscriptionJobStatus"] == "COMPLETED":
             if len(get_transcription["TranscriptionJob"]["LanguageCodes"]) > 0:
                 if float(get_transcription["TranscriptionJob"]["LanguageCodes"][0]["DurationInSeconds"]) >= language_code_validity_duration_threshold:
                     language_code = get_transcription["TranscriptionJob"]["LanguageCodes"][0]["LanguageCode"]
+                    if "-" in language_code: language_code = language_code.split("-")[0] # Get only the language code and ignore the dialect information
         return language_code
 
     def prompt_translate(self):
         language_code = self.get_language_code()
 
-        if language_code == "en-US":
-            return f"You are a native speaker of {language_code} and your answer must be {language_code}"
+        if language_code == "en":
+            return f"You are a native speaker of this language code '{language_code}' and your answer MUST be in '{language_code}'"
         else:
-            return f"You are a native speaker of {language_code} and your answer must be {language_code}, not en-US"
+            return f"You are a native speaker of this language code '{language_code}' and your answer MUST be in '{language_code}', not 'en'"
 
     def generate_summary(self):
         system_prompt = "You are an expert video analyst who reads a Video Timeline and creates summary of the video.\n" \
@@ -783,8 +804,8 @@ class VideoAnalyzer(ABC):
                         "Visual scenes (scene) represents the description of how the video frame look like at that second.\n" \
                         "Visual texts (text) are the text visible in the video. It can be texts in real world objects as recorded in video camera, or those from screen sharing, or those from presentation recording, or those from news, movies, or others. \n" \
                         "Human voice (voice) is the transcription of the video.\n" \
-                        "Celebrities (celebrity) provides information about the celebrity detected in the video at that second. It may have the information on whether the celebrity is smiling and the captured emotions. It may also has information on where the face is located relative to the video frame size. The celebrity may not be speaking as he/she may just be portrayed. \n" \
-                        "Human faces (face) lists the face seen in the video at that second. This may have information on the emotions, face location relative to the video frame, and more facial features. \n" \
+                        "Celebrities (celebrity) provides information about the celebrity detected in the video at that second. It may also has information on where the face is located relative to the video frame size. The celebrity may not be speaking as he/she may just be portrayed. \n" \
+                        "Human faces (face) lists the face seen in the video at that second. This may have information about the facial features and the face location relative to the video frame. \n" \
                         f"{self.prompt_translate()}\n"
 
         video_script_length = len(self.combined_video_script)
@@ -889,8 +910,8 @@ class VideoAnalyzer(ABC):
                         "Visual scenes (scene) represents the description of how the video frame look like at that second.\n" \
                         "Visual texts (text) are the text visible in the video. It can be texts in real world objects as recorded in video camera, or those from screen sharing, or those from presentation recording, or those from news, movies, or others. \n" \
                         "Human voice (voice) is the transcription of the video.\n" \
-                        "Celebrities (celebrity) provides information about the celebrity detected in the video at that second. It may have the information on whether the celebrity is smiling and the captured emotions. It may also has information on where the face is located relative to the video frame size. The celebrity may not be speaking as he/she may just be portrayed. \n" \
-                        "Human faces (face) lists the face seen in the video at that second. This may have information on the emotions, face location relative to the video frame, and more facial features. \n"
+                        "Celebrities (celebrity) provides information about the celebrity detected in the video at that second. It may also has information on where the face is located relative to the video frame size. The celebrity may not be speaking as he/she may just be portrayed. \n" \
+                        "Human faces (face) lists the face seen in the video at that second. This may have information about the facial features and the face location relative to the video frame. \n"
                         
         video_script_length = len(self.combined_video_script)
 
