@@ -40,8 +40,8 @@ writer_endpoint = os.environ['DB_WRITER_ENDPOINT']
 video_s3_path = os.environ['VIDEO_S3_PATH'] 
 transcription_job_name = os.environ['TRANSCRIPTION_JOB_NAME']
 label_detection_job_id = os.environ['LABEL_DETECTION_JOB_ID']
-label_detection_enabled = os.environ[CONFIG_LABEL_DETECTION_ENABLED] 
-transcription_enabled = os.environ[CONFIG_TRANSCRIPTION_ENABLED] 
+label_detection_enabled = True if os.environ[CONFIG_LABEL_DETECTION_ENABLED] == "1" else False
+transcription_enabled = True if os.environ[CONFIG_TRANSCRIPTION_ENABLED] == "1" else False
 
 
 credentials = json.loads(secrets_manager.get_secret_value(SecretId=secret_name)["SecretString"])
