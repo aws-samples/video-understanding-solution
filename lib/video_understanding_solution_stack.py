@@ -387,6 +387,8 @@ class VideoUnderstandingSolutionStack(Stack):
             result_path="$.preprocessingResult",
         )
 
+        preprocessing_task.add_retry(max_attempts=50, backoff_rate=3, interval=Duration.seconds(5))
+
         # Step function task to start the Rekognition label detection task to detect visual scenes
         start_rekognition_label_detection_sfn_task = _sfn_tasks.CallAwsService(
             self,
@@ -434,6 +436,7 @@ class VideoUnderstandingSolutionStack(Stack):
         )
 
         label_detection_success = _sfn.Succeed(self, "Label detection is successful")
+        label_detection_skipped = _sfn.Pass(self, "Label detection is skipped", result_path="$.labelDetectionResult", result=_sfn.Result.from_object({"JobId": ""}))
         label_detection_failure = _sfn.Pass(self, "Label detection is failed, but continuing anyway.")
         label_detection_choice = _sfn.Choice(self, "Label detection choice")
         label_detection_success_condition = _sfn.Condition.string_equals("$.labelDetectionResult.JobStatus", "SUCCEEDED")
@@ -499,6 +502,7 @@ class VideoUnderstandingSolutionStack(Stack):
 
         transcription_success = _sfn.Succeed(self, "Transcription is successful")
         transcription_failure = _sfn.Pass(self, "Transcription is failed, but continuing anyway.")
+        transcription_skipped = _sfn.Pass(self, "Transcription is skipped", result_path="$.transcriptionResult", result=_sfn.Result.from_object({"TranscriptionJobName": ""}))
         transcription_choice = _sfn.Choice(self, "Transcription choice")
         transcription_success_condition = _sfn.Condition.string_equals("$.transcriptionResult.TranscriptionJobStatus", "COMPLETED")
         transcription_failure_condition = _sfn.Condition.string_equals("$.transcriptionResult.TranscriptionJobStatus", "FAILED")
@@ -511,10 +515,13 @@ class VideoUnderstandingSolutionStack(Stack):
         # Define the parallel tasks for Rekognition and Transcribe.
         parallel_sfn = _sfn.Parallel(self, "StartVideoAnalysisParallelSfn")
 
-        if _sfn.Condition.string_equals(f"$.preprocessingResult.Payload.body.{CONFIG_LABEL_DETECTION_ENABLED}", "1"):
-            parallel_sfn = parallel_sfn.branch(start_rekognition_label_detection_sfn_task)
-        if _sfn.Condition.string_equals(f"$.preprocessingResult.Payload.body.{CONFIG_TRANSCRIPTION_ENABLED}", "1"):
-            parallel_sfn = parallel_sfn.branch(start_transcription_job_sfn_task)
+        start_label_detection_choice = _sfn.Choice(self, "StartLabelDetectionChoice")
+        start_label_detection_choice.when(_sfn.Condition.string_equals(f"$.preprocessingResult.Payload.body.{CONFIG_LABEL_DETECTION_ENABLED}", "1"), start_rekognition_label_detection_sfn_task).otherwise(label_detection_skipped)
+        parallel_sfn = parallel_sfn.branch(start_label_detection_choice)
+
+        start_transcription_choice = _sfn.Choice(self, "StartTranscriptionChoice")
+        start_transcription_choice.when(_sfn.Condition.string_equals(f"$.preprocessingResult.Payload.body.{CONFIG_TRANSCRIPTION_ENABLED}", "1"), start_transcription_job_sfn_task).otherwise(transcription_skipped)
+        parallel_sfn = parallel_sfn.branch(start_transcription_choice)
 
         # Chain parallel task after preprocessing lambda
         preprocessing_task.next(parallel_sfn)

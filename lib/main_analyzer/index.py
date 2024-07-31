@@ -597,6 +597,7 @@ class VideoAnalyzer(ABC):
         self.summary: str = ""
         self.entities: str = ""
         self.video_script: str = ""
+        self.language_code: str = ""
     
     class Videos(Base):
         __tablename__ = video_table_name
@@ -678,7 +679,7 @@ class VideoAnalyzer(ABC):
     def preprocess_transcript(self):
         transcript= dict()
         previous_millis: int = 0
-        if "results" in original_transcript and "items" in original_transcript['results']:
+        if "results" in self.original_transcript and "items" in self.original_transcript['results']:
             for item in self.original_transcript["results"]["items"]:
                 if item['type'] == 'punctuation':
                     current_millis = previous_millis + 1 # Just add 1 millisecond to avoid this punctuation replaces the previous word.
@@ -777,19 +778,25 @@ class VideoAnalyzer(ABC):
         self.all_combined_video_script += combined_video_script
   
     def get_language_code(self):
-        get_transcription = self.transcribe_client.get_transcription_job(TranscriptionJobName=self.transcription_job_name)
         language_code: str = 'en'
-        language_code_validity_duration_threshold: float = 2.0 # Only consider the language code as valid if the speech is longer than 2 seconds, otherwise it might be invalid data.
+
+        if transcription_enabled and self.transcription_job_name != "":
+            get_transcription = self.transcribe_client.get_transcription_job(TranscriptionJobName=self.transcription_job_name)
         
-        if "LanguageCodes" in get_transcription["TranscriptionJob"] and get_transcription["TranscriptionJob"]["TranscriptionJobStatus"] == "COMPLETED":
-            if len(get_transcription["TranscriptionJob"]["LanguageCodes"]) > 0:
-                if float(get_transcription["TranscriptionJob"]["LanguageCodes"][0]["DurationInSeconds"]) >= language_code_validity_duration_threshold:
-                    language_code = get_transcription["TranscriptionJob"]["LanguageCodes"][0]["LanguageCode"]
-                    if "-" in language_code: language_code = language_code.split("-")[0] # Get only the language code and ignore the dialect information
+            language_code_validity_duration_threshold: float = 2.0 # Only consider the language code as valid if the speech is longer than 2 seconds, otherwise it might be invalid data.
+            
+            if "LanguageCodes" in get_transcription["TranscriptionJob"] and get_transcription["TranscriptionJob"]["TranscriptionJobStatus"] == "COMPLETED":
+                if len(get_transcription["TranscriptionJob"]["LanguageCodes"]) > 0:
+                    if float(get_transcription["TranscriptionJob"]["LanguageCodes"][0]["DurationInSeconds"]) >= language_code_validity_duration_threshold:
+                        language_code = get_transcription["TranscriptionJob"]["LanguageCodes"][0]["LanguageCode"]
+                        if "-" in language_code: language_code = language_code.split("-")[0] # Get only the language code and ignore the dialect information
+        
+        self.language_code = language_code
+        
         return language_code
 
     def prompt_translate(self):
-        language_code = self.get_language_code()
+        language_code = self.get_language_code() if self.language_code == "" else self.language_code
 
         if language_code == "en":
             return f"You are a native speaker of this language code '{language_code}' and your answer MUST be in '{language_code}'"

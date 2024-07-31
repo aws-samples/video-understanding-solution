@@ -87,6 +87,15 @@ You can upload videos into the S3 bucket using the web UI. Or, you can upload th
 ### Using the web UI
 In the web UI, you can search for videos in your S3 bucket. For each video found, you can view the video, see its summary, check the extracted entities, and ask the chatbot about the video e.g. "What is funny or interesting about the video?". The chatbot is equipped with memory for the current conversation, so the user can have a context-aware conversation with the bot. You can also search videos using the name prefix, uploaded date range, and what the video is about. The latter is powered by semantic search using LLM.
 
+## Configuration
+### Enabling/disabling features
+You can enable/disable 2 features for now:
+1. Transcription. For use cases where extracting information from the speech in the video won't be important, you can save cost by disabling this feature.
+2. Face detection, and celebrity detection. For use case where these information won't be important, you can disable them. With these disabled, the solution will still extract the visual scene information and the text overlay (if any) of the videos.
+
+
+To enable/disable these, you can log in to your AWS Console and go to AWS SSM Parameter Store for a parameter VideoUnderstandingStack-configuration. For example you can go [here](https://us-west-2.console.aws.amazon.com/systems-manager/parameters/VideoUnderstandingStack-configuration/description?region=us-west-2&tab=Table) if you deploy the solution in Oregon (us-west-2) region. For other region, you can change any "us-west-2" in that hyperlink to your selected region. Then you can edit the parameter value. The value "1" means enabled and value "0" means disabled. The "label_detection_enabled" represents the face and celebrity detection while "transcription_enabled" represents the transcription. By default, both are enabled ("1").
+
 ## Cost
 The cost of using this solution is determined by the pricing and usage of the components being deployed. This includes, but not being limited to (not the exhaustive list):
 
