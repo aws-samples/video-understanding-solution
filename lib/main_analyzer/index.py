@@ -11,6 +11,7 @@ import base64
 from PIL import Image
 import concurrent.futures
 from multiprocessing import Pool
+import itertools
 
 CONFIG_LABEL_DETECTION_ENABLED = "label_detection_enabled"
 CONFIG_TRANSCRIPTION_ENABLED = "transcription_enabled"
@@ -425,44 +426,218 @@ class VideoPreprocessor(ABC):
         
         self.person_frame_bytes = self.person_frame_bytes + list(filter(lambda f: f[0] in person_timestamp_millis_joined_with_regular, self.frame_bytes))
  
-    def _extract_scene_from_vqa(self, frame_info: list[Union[int, bytes]]):
-        timestamp_millis = frame_info[0]
-        image = frame_info[1]
+    def _extract_scene_from_vqa(self, frame_info: list[list[Union[int, bytes]]]):
+        timestamp_millis = frame_info[0][0]
+        # Extract all image data into image_list
+        image_list = [frame[1] for frame in frame_info]
 
-        system_prompt = "You are an expert in extracting information from video frames. Each video frame is an image. You will extract the scene, text, and caption."
-        task_prompt =   "Extract information from this image and output a JSON with this format:\n" \
-                    "{\n" \
-                    "\"scene\" : \"String\",\n" \
-                    "\"caption\" : \"String\",\n" \
-                    "\"text\" : [\"String\", \"String\" , . . .],\n" \
-                    "}\n" \
-                    "For \"scene\", look carefully, think hard, and describe what you see in the image in detail, yet succinct. \n" \
-                    "For \"caption\", look carefully, think hard, and give a SHORT caption (3-8 words) that best describes what is happening in the image. This is intended for visually impaired ones. \n" \
-                    "For \"text\", list the text you see in that image confidently. If nothing return empty list.\n"
-        vqa_response = self.call_vqa(image_data=base64.b64encode(image).decode("utf-8"), system_prompt = system_prompt, task_prompt=task_prompt) 
+        system_prompt = """
+        
+You are an expert in extracting key events from a soccer game. You will be given sequence of video frames from a soccer game. Your task is to identify whether some key event happens in these sequence of video frames. 
 
-        # Sometimes the response might be censored due to false positive of inappropriate content. When that happens, just skip this frame.
-        pattern = r'"scene"\s*:\s*"(.+?)".*?"caption"\s*:\s*"(.+?)".*?"text"\s*:\s*\[(.*?)\]'
-        match = re.search(pattern, vqa_response, re.DOTALL)
+The possible key events are: goal, corner kick, free kick, foul, offside, injury, shot on target, shot off target.
+ 
+Each event has it's own JSON structure as followed. Try to capture the information from the video frames and fill in the JSON structure accordingly. If you cannot capture the information, set the value as "none".
 
-        if match:
-            scene = match.group(1)
-            caption = match.group(2)
-            text = match.group(3)
-            self.visual_scenes[timestamp_millis] = scene
-            if len(text) > 0:
-                self.visual_texts[timestamp_millis] = [t.strip().strip("\"") for t in text.replace("\n","").split(",")]
-            self.visual_captions[timestamp_millis] = caption
+goal => 
+{
+   "key_event" : "goal",
+   "player_nbr" : 7,
+   "jersey_color" : "red",
+   "is_penalty_kick" : False,
+   "event_interval" : string,
+   "game_clock" : "02:33",
+   "team_name": "FC Bayern",
+   "replay": False,
+   "key_event_prediction_confident_score" : int
+}
 
-            
+corner kick =>
+{
+   "key_event" : "corner_kick",
+   "corner_side" : string(left|right),
+   "player_nbr" : int,
+   "jersey_color" : "white",
+   "event_interval" : string,
+   "game_clock" : "04:13",
+   "team_name": "RB Leipzig",
+   "replay": False,
+   "key_event_prediction_confident_score" : int
+}
 
-    
+free kick =>
+{
+   "key_event" : "free_kick",
+   "player_nbr" : int,
+   "jersey_color" : "white",
+   "event_interval" : string,
+   "game_clock" : "12:55",
+   "replay": True,
+   "team_name": "RB Leipzig",
+   "key_event_prediction_confident_score" : int
+}
+
+foul =>
+{
+   "key_event" : "foul",
+   "player_nbr" : int,
+   "offending_player_jersey_color" : "red",
+   "is_yellow_card" : boolean,
+   "is_red_card" : boolean,
+   "is_penalty" : boolean
+   "event_interval" : string,
+   "game_clock" : "42:23",
+   "team_name": "FC Bayern",
+   "replay": False,
+   "key_event_prediction_confident_score" : int
+}
+
+offside =>
+{
+   "key_event" : "offside",
+   "player_nbr" : int,
+   "jersey_color" : "red",
+   "event_interval" : string,
+   "game_clock" : "32:01",
+   "replay": False,
+   "team_name": "FC Bayern",
+   "key_event_prediction_confident_score" : int
+}
+
+injury =>
+{
+   "key_event" : "injury",
+   "player_nbr" : int,
+   "injured_player_jersey_color" : "white"
+   "event_interval" : string,
+   "game_clock" : "55:31",
+   "replay": False,
+   "team_name": "RB Leipzig",
+   "key_event_prediction_confident_score" : int
+}
+
+shot on target =>
+{
+   "key_event" : "shot_on_goal_target",
+   "player_nbr" : int,
+   "player_jersey_color" : "red",
+   "event_interval" : string,
+   "game_clock" : "62:00",
+   "replay": False,
+   "team_name": "FC Bayern",
+   "key_event_prediction_confident_score" : int
+}
+
+shot off target =>
+{
+   "key_event" : "shot_off_goal_target",
+   "player_nbr" : int,
+   "player_jersey_color" : "red",
+   "event_interval" : string,
+   "game_clock" : "70:33",
+   "replay": False,
+   "team_name": "FC Bayern",
+   "key_event_prediction_confident_score" : int
+}
+
+no key event =>
+{
+   "key_event" : "none"
+   "event_interval" : string
+}
+
+Capture the game clock ONLY if it's visible in the video frames. Game clock is located on the upper left corner of a video frame. DO NOT use any other means to capture the Game clock. If you cannot determine the Game clock, set its value as "none".
+
+Here are a comprehensive and strict guidelines for identify each key event:
+
+### Foul
+- A foul could either be a NORMAL foul, a YELLOW CARD or a RED CARD. 
+- To help you determine the type of foul, you must first identify the referee or linesman in the video frames. You must look closely as they could be small and hard to detect. Identify them by the color of their shirts and pants. The referee and the linesman wear turquoise color shirt and black shorts. If referee or linesman is visible, describe their actions. If the referee runs towards the players, or raises his arm, it signals a foul.
+- If in your description you mentioned a flag is raised, or a yellow card, or red card is visible, it is a strong indicator of a foul.
+- In situation where the referee approaches players it is highly like a foul being called, even though no cards are presented. 
+- Even a minor foul is a considered a key event.
+- In sequence of frames where the referee approaches players quickly it is highly a foul is called, even though no cards are presented at the moment yet.
+- Do not assume any yellow or red card unless you saw the referee actually raised the card in the image frames. Do not make any assumptions.
+
+### Offside
+- To help you determine an offside, you must identify whether the linesman is shown any of the video frames. The referee and the linesman wear turquoise color shirt and black shorts. If the linesman is detected, describe his actions. If a flag is raised by the linesman, and it's not obvious that the ball is out, then it is a strong indicator of an offside call.
+
+### Goal
+- Pay close attention to the ball location on the field. Keep track of the ball locations through the sequence image frames. If the ball travels into the back of the net, it's very likely a goal is scored.
+- Hints like a player celebration that follows is a strong indicator that a goal is scored.
+
+### Free Kick
+- Pay attention whether the ball is idle on the ground. If it's idle, then check to see if there are at least 1 player is lined up to a set piece. If it's the case, then it's a strong indication of a free kick.
+- Pay close attention to the formation of other players on the field. A free kick usually have at least 2 players forming a wall as a defensive play. If a defensive play wall is identified, it's a strong indicator of a free kick.
+- Free kick does not start from the position next to a corner flag pole. Do not confuse free kick with corner kicks.
+
+### Corner kick
+- Identify the location of the ball in the image frame sequence. A corner kick scene must have the ball and the player positioned at the extreme corner edge of the field, next to the corner flag pole.
+- The corner flag must be visible in the image frames to consider a corner kick. Because you have misidentified corner flag poles before, you must describe why you think you see the corner flag pole on the image frames to make sure it's in the image. Do not make any assumptions. Do not confuse the lines on the field with the corner flags pole. The corner flag pole has a flag at the top of the flag stick. You must be 100% sure about seeing the corner flag pole before making any decisions.
+- Use the combined appearance of the corner flag pole, the ball and the player as a strong indicator for a corner kick. 
+- If the corner flag pole is not visible in the image frames, it is not a corner kick. you MUST NOT make any assumptions.
+
+
+### Injury
+- When determining an injury, one or both players should be laying on the ground in pain. 
+- If there are multiple players surrounding the injured player, it's a strong indicator of an injury occured.
+
+
+### Shot On Target
+- Identify the goalkeeper first. You should identify the goalie by their outfits. The goalkeeper for Bayern Munich wears light green long sleeves, light green shorts and light green socks. The goalkeeper for RB Leipzig wears bright yellow long sleeves, bright yellow shorts and bright yellow socks.
+- If the goalkeeper is visible in the image frames, pay close attention to his action. Describe what the goalkeeper is doing in the image frames. If the image frames suggest he caught the ball, or dived to deflect it from a goal, it is a shot on goal target.
+- Be aware that the action of the goalkeeper might not be obvious because the camera did not zoom in on him. You must pay detail attention to the goalkeeper to identify his action.
+- In addition to goalkeeper's action, you must also identify the position of the ball. It's important to identify through the continuous sequence of images that the ball is moving towards the goal. Tracking the ball direction is important to determine whether a shot on target.
+
+### Shot off target  
+- You must fist identify the position of the ball and the direction where it is traveling. It's important to identify through the continuous sequence of images that the ball is moving towards the goal. 
+- Once you have identified that the ball moves in the direction of the goal, you must pay close attention find image frames of the player who kicks the ball towards the goal post. 
+- The goalkeeper must be present in the image frames. Describe his action through the sequence of image frames. If he did not attempt to save the ball, it's a strong indicator that it's a shot off target.
+
+
+Other important tips are described in the following :
+
+- You must analyze the given commentary very carefully to determine whether it is useful in determining the key event, do not make up any assumptions or guesses because the given commentary could have incomplete sentences. For example, do not assume there is a key event just because the commentary mentions a player's name.
+- You should use the images to identify key events first, then use commentary if you are unsure.
+- If the goalkeeper, or the goal post is not in video frames, you must determine that there are no shots taken.
+- Capture if you are seeing a Replay. You must look closely to see graphic overlays. These graphic overlays are a grid of 3d white boxes with the word "SUPERCUP" in the center box. If you find a frame or frames having this, assign True to the "replay" attribute in the JSON structure. If not, assign False.
+- Pay attention to the jersey colors of players. If the jersey color of the player_nbr has the color "red", assign the "team_name" as "RB Leipzig".If the jersey color of the player_nbr has the color "white", assign the "team_name" as "FC Bayern".
+
+Tips to achieve high confidence in predicting the correct key event:
+
+- Provide a confident score (0 to 100) to indicate your confident level of the predicted key event after going through your analysis. 
+- You should come up with this confident scores after analyzing all the frames. 
+- Confident scores equal or higher than 80 is good enough to predict any key event. 
+- Do your best to provide the confident score, it will help human to determine whether the predicted key event is relevant.
+
+You need to consider all the video frames as a whole to effectively detect the event. You must not make any assumptions. If you are not sure about the event, set the value as "none".
+
+Only return the key events in JSON format defined above. There should only be 1 key event for the given video frames. Do not provide any other further explanations.."""
+        
+        
+        task_prompt =   "Analyze the given sequence of video frames"
+        
+        vqa_response = self.call_vqa(image_data=[base64.b64encode(image).decode("utf-8") for image in image_list], system_prompt = system_prompt, task_prompt=task_prompt) 
+
+        # use scenes to store the key event
+        self.visual_scenes[timestamp_millis] = vqa_response
+
+    def _batch_frames(self, iterable, n):
+        "Batch data into lists of length n. The last batch may be shorter."
+        it = iter(iterable)
+        while True:
+            batch = list(itertools.islice(it, n))
+            if not batch:
+                return
+            yield batch        
+
     def extract_scenes_from_vqa(self):
         timestamp_millis: int
         image: bytes
           
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.parallel_degree*15) as executor:
-            executor.map(self._extract_scene_from_vqa, self.frame_bytes)
+            batches = list(self._batch_frames(self.frame_bytes, 30))
+            executor.map(self._extract_scene_from_vqa, batches)
     
     def wait_for_dependencies(self):
         if label_detection_enabled:
@@ -512,17 +687,22 @@ class VideoPreprocessorBedrockVQA(VideoPreprocessor):
             "top_k": 3,
         }
     
-    def call_vqa(self, image_data: bytes, system_prompt: str, task_prompt: str) -> str:
+    def call_vqa(self, image_data: list[bytes], system_prompt: str, task_prompt: str) -> str:
         self.llm_parameters["system"] = system_prompt
         self.llm_parameters["messages"] = [
             {
                 "role": "user",
                 "content": [
-                    { "type": "image", "source": { "type": "base64", "media_type": "image/jpeg", "data": image_data } },
                     { "type": "text", "text": task_prompt }
                 ]
             }
         ]
+        
+        # Add each image to the content list
+        for img in image_data:
+            self.llm_parameters["messages"][0]["content"].insert(0, 
+                { "type": "image", "source": { "type": "base64", "media_type": "image/jpeg", "data": img } }
+            )
         
         encoded_input = json.dumps(self.llm_parameters).encode("utf-8")
         call_done = False
