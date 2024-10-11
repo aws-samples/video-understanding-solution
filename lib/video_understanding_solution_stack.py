@@ -32,7 +32,7 @@ from cdk_nag import AwsSolutionsChecks, NagSuppressions
 
 model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
 vqa_model_id = "anthropic.claude-3-haiku-20240307-v1:0"
-frame_interval = "1000" # milliseconds
+frame_interval = "350" # milliseconds
 fast_model_id = "anthropic.claude-3-haiku-20240307-v1:0"
 balanced_model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
 embedding_model_id = "cohere.embed-multilingual-v3"
