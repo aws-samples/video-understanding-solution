@@ -618,6 +618,9 @@ Only return the key events in JSON format defined above. There should only be 1 
         task_prompt =   "Analyze the given sequence of video frames"
         
         vqa_response = self.call_vqa(image_data=[base64.b64encode(image).decode("utf-8") for image in image_list], system_prompt = system_prompt, task_prompt=task_prompt) 
+        
+        # Log the vqa_response
+        print(f"VQA Response for timestamp {timestamp_millis}: {vqa_response}")
 
         # use scenes to store the key event
         self.visual_scenes[timestamp_millis] = vqa_response
@@ -631,10 +634,7 @@ Only return the key events in JSON format defined above. There should only be 1 
                 return
             yield batch        
 
-    def extract_scenes_from_vqa(self):
-        timestamp_millis: int
-        image: bytes
-          
+    def extract_scenes_from_vqa(self):         
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.parallel_degree*15) as executor:
             batches = list(self._batch_frames(self.frame_bytes, 30))
             executor.map(self._extract_scene_from_vqa, batches)
