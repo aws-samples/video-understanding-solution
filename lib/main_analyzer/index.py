@@ -12,6 +12,7 @@ from PIL import Image
 import concurrent.futures
 from multiprocessing import Pool
 import itertools
+import logging
 
 CONFIG_LABEL_DETECTION_ENABLED = "label_detection_enabled"
 CONFIG_TRANSCRIPTION_ENABLED = "transcription_enabled"
@@ -76,6 +77,8 @@ class CelebrityFinding():
         self.height_display: str = str(round(self.height, 2))
         self.width: float = float(celebrity_dict['Face']['BoundingBox']['Width'])
         self.width_display: str = str(round(self.width, 2))
+        
+        logging.basicConfig(level=logging.DEBUG)
 
     def is_matching_face(self, bb_top:float , bb_left: float, bb_height: float, bb_width: float) -> bool:
         return (
@@ -620,7 +623,7 @@ Only return the key events in JSON format defined above. There should only be 1 
         vqa_response = self.call_vqa(image_data=[base64.b64encode(image).decode("utf-8") for image in image_list], system_prompt = system_prompt, task_prompt=task_prompt) 
         
         # Log the vqa_response
-        print(f"Warning: VQA Response for timestamp {timestamp_millis}: {vqa_response}")
+        logging.debug(f"Warning: VQA Response for timestamp {timestamp_millis}: {vqa_response}")
 
         # use scenes to store the key event
         self.visual_scenes[timestamp_millis] = vqa_response
