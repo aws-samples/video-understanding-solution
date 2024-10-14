@@ -620,7 +620,7 @@ Only return the key events in JSON format defined above. There should only be 1 
         vqa_response = self.call_vqa(image_data=[base64.b64encode(image).decode("utf-8") for image in image_list], system_prompt = system_prompt, task_prompt=task_prompt) 
         
         # Log the vqa_response
-        print(f"VQA Response for timestamp {timestamp_millis}: {vqa_response}")
+        print(f"Warning: VQA Response for timestamp {timestamp_millis}: {vqa_response}")
 
         # use scenes to store the key event
         self.visual_scenes[timestamp_millis] = vqa_response
