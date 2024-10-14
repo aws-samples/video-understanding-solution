@@ -650,12 +650,19 @@ Only return the key events in JSON format defined above. There should only be 1 
 
     def run(self):
         self.download_video_and_load_metadata()
+        
         if label_detection_enabled:
             self.iterate_object_detection_result()
+        
+        print("Extracting frames...")
         self.extract_frames()
+        
         if label_detection_enabled:
             self.detect_faces_and_celebrities()
+        
+        print("Extracting scenes from VQA...")
         self.extract_scenes_from_vqa()
+        
         if transcription_enabled:
             self.fetch_transcription()
         return self.visual_objects, self.visual_scenes, self.visual_captions, self.visual_texts, self.transcript, self.celebrities, self.faces
