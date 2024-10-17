@@ -16,12 +16,20 @@ import logging
 
 CONFIG_LABEL_DETECTION_ENABLED = "label_detection_enabled"
 CONFIG_TRANSCRIPTION_ENABLED = "transcription_enabled"
+CONFIG_NUMBER_OF_FRAMES_TO_LLM = "number_of_frames_to_llm"
+CONFIG_VIDEO_SAMPLING_INTERVAL_MS = "video_sampling_interval_ms"
+LLM_MODEL = "llm_model"
+
+fast_model_id = "anthropic.claude-3-haiku-20240307-v1:0"
+balanced_model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
+
 
 secrets_manager = boto3.client('secretsmanager')
 
-model_id = os.environ["MODEL_ID"]
-vqa_model_id = os.environ["VQA_MODEL_ID"]
-frame_interval = os.environ['FRAME_INTERVAL']
+model_id = os.environ["FAST_MODEL_ID"] if os.environ[LLM_MODEL] == "fast" else os.environ["BALANCED_MODEL_ID"]
+vqa_model_id = os.environ["FAST_MODEL_ID"] if os.environ[LLM_MODEL] == "fast" else os.environ["BALANCED_MODEL_ID"]
+frame_interval = os.environ[CONFIG_VIDEO_SAMPLING_INTERVAL_MS]
+number_of_frames_to_llm = os.environ[CONFIG_NUMBER_OF_FRAMES_TO_LLM]
 embedding_model_id = os.environ["EMBEDDING_MODEL_ID"]
 embedding_dimension = os.environ['EMBEDDING_DIMENSION']
 bucket_name = os.environ["BUCKET_NAME"]
@@ -438,20 +446,20 @@ class VideoPreprocessor(ABC):
         
 You are an expert in extracting key events from a soccer game. You will be given sequence of video frames from a soccer game. Your task is to identify whether some key event happens in these sequence of video frames. 
 
-The possible key events are: goal, corner kick, free kick, foul, offside, injury, shot on target, shot off target.
+The possible key events are: shot, corner kick, free kick, foul, offside, injury.
  
-Each event has it's own JSON structure as followed. Try to capture the information from the video frames and fill in the JSON structure accordingly. If you cannot capture the information, set the value as "none".
+Each event has it's own JSON structure as followed. Try to capture the information from the video frames and fill in the JSON structure accordingly. 
 
-goal => 
+If you cannot capture the information, output nothing. If you cannot detect any event, output nothing.
+
+shot => 
 {
-   "key_event" : "goal",
+   "key_event" : "shot",
    "player_nbr" : 7,
    "jersey_color" : "red",
-   "is_penalty_kick" : False,
    "event_interval" : string,
    "game_clock" : "02:33",
    "team_name": "FC Bayern",
-   "replay": False,
    "key_event_prediction_confident_score" : int
 }
 
@@ -519,39 +527,9 @@ injury =>
    "key_event_prediction_confident_score" : int
 }
 
-shot on target =>
-{
-   "key_event" : "shot_on_goal_target",
-   "player_nbr" : int,
-   "player_jersey_color" : "red",
-   "event_interval" : string,
-   "game_clock" : "62:00",
-   "replay": False,
-   "team_name": "FC Bayern",
-   "key_event_prediction_confident_score" : int
-}
-
-shot off target =>
-{
-   "key_event" : "shot_off_goal_target",
-   "player_nbr" : int,
-   "player_jersey_color" : "red",
-   "event_interval" : string,
-   "game_clock" : "70:33",
-   "replay": False,
-   "team_name": "FC Bayern",
-   "key_event_prediction_confident_score" : int
-}
-
-no key event =>
-{
-   "key_event" : "none"
-   "event_interval" : string
-}
-
 Capture the game clock ONLY if it's visible in the video frames. Game clock is located on the upper left corner of a video frame. DO NOT use any other means to capture the Game clock. If you cannot determine the Game clock, set its value as "none".
 
-Here are a comprehensive and strict guidelines for identify each key event:
+Here are a comprehensive and strict guidelines for identify each key event. If you detected Goal, Shot on target, Shot off target, mark the event type as Shot.
 
 ### Foul
 - A foul could either be a NORMAL foul, a YELLOW CARD or a RED CARD. 
@@ -613,7 +591,7 @@ Tips to achieve high confidence in predicting the correct key event:
 - Confident scores equal or higher than 80 is good enough to predict any key event. 
 - Do your best to provide the confident score, it will help human to determine whether the predicted key event is relevant.
 
-You need to consider all the video frames as a whole to effectively detect the event. You must not make any assumptions. If you are not sure about the event, set the value as "none".
+You need to consider all the video frames as a whole to effectively detect the event. You must not make any assumptions.
 
 Only return the key events in JSON format defined above. There should only be 1 key event for the given video frames. Do not provide any other further explanations.."""
         
@@ -639,7 +617,7 @@ Only return the key events in JSON format defined above. There should only be 1 
 
     def extract_scenes_from_vqa(self):         
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.parallel_degree*15) as executor:
-            batches = list(self._batch_frames(self.frame_bytes, 5))
+            batches = list(self._batch_frames(self.frame_bytes, number_of_frames_to_llm))
             executor.map(self._extract_scene_from_vqa, batches)
     
     def wait_for_dependencies(self):

@@ -55,6 +55,9 @@ visual_objects_detection_confidence_threshold = 30.0
 BASE_DIR = os.getcwd()
 CONFIG_LABEL_DETECTION_ENABLED = "label_detection_enabled" # Value is "1" or "0"
 CONFIG_TRANSCRIPTION_ENABLED = "transcription_enabled" # Value is "1" or "0"
+CONFIG_VIDEO_SAMPLING_INTERVAL_MS = "video_sampling_interval_ms" # Value is in milliseconds
+CONFIG_NUMBER_OF_FRAMES_TO_LLM = "number_of_frames_to_llm" # Value is an integer
+LLM_MODEL = "llm_model" # Value is either "fast" or "balanced"
 
 class VideoUnderstandingSolutionStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
@@ -99,7 +102,10 @@ class VideoUnderstandingSolutionStack(Stack):
         # Parameter store for storing application configuration
         default_configuration_parameters = {
             CONFIG_LABEL_DETECTION_ENABLED: "1",
-            CONFIG_TRANSCRIPTION_ENABLED: "1"
+            CONFIG_TRANSCRIPTION_ENABLED: "1",
+            CONFIG_NUMBER_OF_FRAMES_TO_LLM: "10",
+            CONFIG_VIDEO_SAMPLING_INTERVAL_MS: "500",
+            LLM_MODEL: "fast"
         }
         default_configuration_parameters_json = json.dumps(default_configuration_parameters)
         configuration_parameters_ssm = _ssm.StringParameter(self, f"{construct_id}-configuration-parameters",
@@ -661,6 +667,9 @@ class VideoUnderstandingSolutionStack(Stack):
                     _sfn_tasks.TaskEnvironmentVariable(name="TRANSCRIPTION_JOB_NAME", value=_sfn.JsonPath.string_at("$[1].transcriptionResult.TranscriptionJobName")),
                     _sfn_tasks.TaskEnvironmentVariable(name=CONFIG_LABEL_DETECTION_ENABLED, value=_sfn.JsonPath.string_at(f"$[0].preprocessingResult.Payload.body.{CONFIG_LABEL_DETECTION_ENABLED}")),
                     _sfn_tasks.TaskEnvironmentVariable(name=CONFIG_TRANSCRIPTION_ENABLED, value=_sfn.JsonPath.string_at(f"$[0].preprocessingResult.Payload.body.{CONFIG_TRANSCRIPTION_ENABLED}")),
+                    _sfn_tasks.TaskEnvironmentVariable(name=CONFIG_NUMBER_OF_FRAMES_TO_LLM, value=_sfn.JsonPath.string_at(f"$[0].preprocessingResult.Payload.body.{CONFIG_NUMBER_OF_FRAMES_TO_LLM}")),
+                    _sfn_tasks.TaskEnvironmentVariable(name=CONFIG_VIDEO_SAMPLING_INTERVAL_MS, value=_sfn.JsonPath.string_at(f"$[0].preprocessingResult.Payload.body.{CONFIG_VIDEO_SAMPLING_INTERVAL_MS}")),
+                    _sfn_tasks.TaskEnvironmentVariable(name=LLM_MODEL, value=_sfn.JsonPath.string_at(f"$[0].preprocessingResult.Payload.body.{LLM_MODEL}")),
                     _sfn_tasks.TaskEnvironmentVariable(name='DATABASE_NAME', value= database_name),
                     _sfn_tasks.TaskEnvironmentVariable(name='VIDEO_TABLE_NAME', value= video_table_name),
                     _sfn_tasks.TaskEnvironmentVariable(name='ENTITIES_TABLE_NAME', value= entities_table_name),

@@ -16,6 +16,9 @@ writer_endpoint = os.environ['DB_WRITER_ENDPOINT']
 embedding_dimension = os.environ['EMBEDDING_DIMENSION']
 CONFIG_LABEL_DETECTION_ENABLED = "label_detection_enabled"
 CONFIG_TRANSCRIPTION_ENABLED = "transcription_enabled"
+CONFIG_VIDEO_SAMPLING_INTERVAL_MS = "video_sampling_interval_ms"
+CONFIG_NUMBER_OF_FRAMES_TO_LLM = "number_of_frames_to_llm"
+LLM_MODEL = "llm_model"
 
 ssm = boto3.client('ssm')
 secrets_manager = boto3.client('secretsmanager')
@@ -87,6 +90,9 @@ def handler(event, context):
         'body': {
             "preprocessing": "success",
             CONFIG_LABEL_DETECTION_ENABLED:configuration_parameter[CONFIG_LABEL_DETECTION_ENABLED],
-            CONFIG_TRANSCRIPTION_ENABLED:configuration_parameter[CONFIG_TRANSCRIPTION_ENABLED]
+            CONFIG_TRANSCRIPTION_ENABLED:configuration_parameter[CONFIG_TRANSCRIPTION_ENABLED],
+            CONFIG_NUMBER_OF_FRAMES_TO_LLM: configuration_parameter[CONFIG_NUMBER_OF_FRAMES_TO_LLM],
+            CONFIG_VIDEO_SAMPLING_INTERVAL_MS: configuration_parameter[CONFIG_VIDEO_SAMPLING_INTERVAL_MS],
+            LLM_MODEL: configuration_parameter[LLM_MODEL],
         }
     }
