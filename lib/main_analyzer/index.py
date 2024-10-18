@@ -26,8 +26,8 @@ balanced_model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
 
 secrets_manager = boto3.client('secretsmanager')
 
-model_id = os.environ["FAST_MODEL_ID"] if os.environ[LLM_MODEL] == "fast" else os.environ["BALANCED_MODEL_ID"]
-vqa_model_id = os.environ["FAST_MODEL_ID"] if os.environ[LLM_MODEL] == "fast" else os.environ["BALANCED_MODEL_ID"]
+model_id = fast_model_id if os.environ[LLM_MODEL] == "fast" else balanced_model_id
+vqa_model_id = model_id
 frame_interval = os.environ[CONFIG_VIDEO_SAMPLING_INTERVAL_MS]
 number_of_frames_to_llm = os.environ[CONFIG_NUMBER_OF_FRAMES_TO_LLM]
 embedding_model_id = os.environ["EMBEDDING_MODEL_ID"]
