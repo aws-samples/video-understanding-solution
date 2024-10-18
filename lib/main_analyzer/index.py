@@ -617,7 +617,7 @@ Only return the key events in JSON format defined above. There should only be 1 
 
     def extract_scenes_from_vqa(self):         
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.parallel_degree*15) as executor:
-            batches = list(self._batch_frames(self.frame_bytes, number_of_frames_to_llm))
+            batches = list(self._batch_frames(self.frame_bytes, int(number_of_frames_to_llm)))
             executor.map(self._extract_scene_from_vqa, batches)
     
     def wait_for_dependencies(self):
