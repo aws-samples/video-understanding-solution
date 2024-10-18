@@ -450,7 +450,9 @@ The possible key events are: shot, corner kick, free kick, foul, offside, injury
  
 Each event has it's own JSON structure as followed. Try to capture the information from the video frames and fill in the JSON structure accordingly. 
 
-If you cannot capture the information, output nothing. If you cannot detect any event, output nothing.
+If you cannot detect any event, output nothing. Don't explain anything.
+
+If you detect the event, output the JSON structure with the key_event field filled in with the event type you detected. Only output the JSON structure for the event you detected. Don't explain anything.
 
 shot => 
 {
