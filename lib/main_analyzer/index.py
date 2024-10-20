@@ -441,8 +441,17 @@ class VideoPreprocessor(ABC):
         timestamp_millis = frame_info[0][0]
         # Extract all image data into image_list
         image_list = [frame[1] for frame in frame_info]
-
-        system_prompt = """
+        
+        # Read the system prompt from S3
+        system_prompt = ""
+        
+        try:
+            response = s3_client.get_object(Bucket=self.bucket_name, Key='source/system_prompt.txt')
+            system_prompt = response['Body'].read().decode('utf-8')
+            logging.debug("System prompt:\n" + system_prompt)
+        except Exception as e:
+            logging.debug(f"Error reading system prompt from S3: {str(e)}. Will use default system prompt.")
+            system_prompt = """
         
 You are an expert in extracting key events from a soccer game. You will be given sequence of video frames from a soccer game. Your task is to identify whether some key event happens in these sequence of video frames. 
 
