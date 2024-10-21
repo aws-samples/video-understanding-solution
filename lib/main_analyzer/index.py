@@ -446,7 +446,7 @@ class VideoPreprocessor(ABC):
         system_prompt = ""
         
         try:
-            response = s3_client.get_object(Bucket=self.bucket_name, Key='source/system_prompt.txt')
+            response = self.s3_client.get_object(Bucket=self.bucket_name, Key='source/system_prompt.txt')
             system_prompt = response['Body'].read().decode('utf-8')
             logging.debug("System prompt:\n" + system_prompt)
         except Exception as e:
