@@ -5,6 +5,7 @@ from aws_cdk import (
     CfnOutput,
     aws_iam as _iam,
     aws_s3 as _s3,
+    aws_s3_assets as _s3_assets,
     aws_ec2 as _ec2,
     aws_rds as _rds,
     aws_events as _events,
@@ -20,6 +21,7 @@ from aws_cdk import (
     aws_codecommit as _codecommit,
     aws_amplify_alpha as _amplify,
     aws_cognito as _cognito,
+    aws_codebuild as _codebuild,
     aws_secretsmanager as _secretsmanager,
     custom_resources as _custom_resources,
     Duration, CfnOutput, BundlingOptions, RemovalPolicy, CustomResource, Aspects, Size
@@ -29,10 +31,9 @@ from aws_cdk.custom_resources import Provider
 from aws_cdk.aws_ecr_assets import DockerImageAsset
 from cdk_nag import AwsSolutionsChecks, NagSuppressions
 
-
 model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
 vqa_model_id = "anthropic.claude-3-haiku-20240307-v1:0"
-frame_interval = "1000" # milliseconds
+frame_interval = "500" # milliseconds
 fast_model_id = "anthropic.claude-3-haiku-20240307-v1:0"
 balanced_model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
 embedding_model_id = "cohere.embed-multilingual-v3"
@@ -1038,9 +1039,7 @@ class VideoUnderstandingSolutionStack(Stack):
             operation_name="ConnectRoute"
         )
         """
-
-
-
+        """
         # CodeCommit repo
         repo_name = f"video-understanding-{int(time.time())}"
         branch_name = "main"
@@ -1048,25 +1047,34 @@ class VideoUnderstandingSolutionStack(Stack):
         webui_zip_file_name = [i for i in os.listdir(webui_path) if os.path.isfile(os.path.join(webui_path,i)) and i.startswith("ui_repo")][0]
 
         repo = _codecommit.Repository(
-          self,
-          "VideoUnderstandingRepo",
-          repository_name=repo_name,
-          description="CodeCommit repository for the video understanding solution's UI",
-          code=_codecommit.Code.from_zip_file(
+        self,
+        "VideoUnderstandingRepo",
+        repository_name=repo_name,
+        description="CodeCommit repository for the video understanding solution's UI",
+        code=_codecommit.Code.from_zip_file(
                 f"{webui_path}{webui_zip_file_name}",
                 branch=branch_name,
-          ),
+        ),
         )
+        """
 
         # Suppress cdk_nag rule to allow <Arn>* in the IAM policy as the video file names can vary
         NagSuppressions.add_resource_suppressions(auth_role, [
             { "id": 'AwsSolutions-IAM5', "reason": 'The <arn>* is needed in the IAM policy to allow variety of file names in S3 bucket.'}
         ], True)
 
+        branch_name = "main"
+        webui_path = f"{BASE_DIR}/webui/"
+        webui_zip_file_name = [i for i in os.listdir(webui_path) if os.path.isfile(os.path.join(webui_path,i)) and i.startswith("ui_repo")][0]
+        ui_asset = _s3_assets.Asset(self, "UIAsset", 
+            #path= f"{webui_path}{webui_zip_file_name}",
+            path= f"{webui_path}"
+        )
+
         ui_amplify_app = _amplify.App(self, "VideoUnderstandingSolutionUIApp", 
-            source_code_provider=_amplify.CodeCommitSourceCodeProvider(
-                repository=repo,
-            ),
+            #source_code_provider=_amplify.CodeCommitSourceCodeProvider(
+            #    repository=repo,
+            #),
             environment_variables={
                 "AMPLIFY_USERPOOL_ID": user_pool.user_pool_id,
                 "AMPLIFY_WEBCLIENT_ID": user_pool_client.user_pool_client_id,
@@ -1085,7 +1093,57 @@ class VideoUnderstandingSolutionStack(Stack):
                 "VIDEOS_API_RESOURCE": videos_api_resource
             }                          
         )
-        master_branch = ui_amplify_app.add_branch(branch_name)
+        print(f"{webui_path}amplify.yml")
+        master_branch = ui_amplify_app.add_branch(
+            branch_name, 
+            asset=ui_asset,
+            #build_spec=_codebuild.BuildSpec.from_source_filename(f"{webui_path}amplify.yml")
+            build_spec = _codebuild.BuildSpec.from_object({
+                "version": "1",
+                "frontend": {
+                    "phases": {
+                        "preBuild": {
+                            "commands": [
+                                "node -e \"console.log('Currently running Node.js ' + process.version)\"",
+                                "npm ci"
+                            ]
+                        },
+                        "build": {
+                            "commands": [
+                                "sed -i \"s/PLACEHOLDER_REGION/$REGION/g\" ./src/aws-exports.js",
+                                "sed -i \"s/PLACEHOLDER_COGNITO_REGION/$REGION/g\" ./src/aws-exports.js",
+                                "sed -i \"s/PLACEHOLDER_IDENTITY_POOL_ID/$AMPLIFY_IDENTITYPOOL_ID/g\" ./src/aws-exports.js",
+                                "sed -i \"s/PLACEHOLDER_USER_POOL_ID/$AMPLIFY_USERPOOL_ID/g\" ./src/aws-exports.js",
+                                "sed -i \"s/PLACEHOLDER_USER_POOL_WEB_CLIENT_ID/$AMPLIFY_WEBCLIENT_ID/g\" ./src/aws-exports.js",
+                                "sed -i \"s/PLACEHOLDER_BUCKET_NAME/$BUCKET_NAME/g\" ./src/aws-exports.js",
+                                "sed -i \"s/PLACEHOLDER_FAST_MODEL_ID/$FAST_MODEL_ID/g\" ./src/aws-exports.js",
+                                "sed -i \"s/PLACEHOLDER_BALANCED_MODEL_ID/$BALANCED_MODEL_ID/g\" ./src/aws-exports.js",
+                                "sed -i \"s/PLACEHOLDER_RAW_FOLDER/$RAW_FOLDER/g\" ./src/aws-exports.js",
+                                "sed -i \"s/PLACEHOLDER_VIDEO_SCRIPT_FOLDER/$VIDEO_SCRIPT_FOLDER/g\" ./src/aws-exports.js",
+                                "sed -i \"s/PLACEHOLDER_VIDEO_CAPTION_FOLDER/$VIDEO_CAPTION_FOLDER/g\" ./src/aws-exports.js",
+                                "sed -i \"s/PLACEHOLDER_TRANSCRIPTION_FOLDER/$TRANSCRIPTION_FOLDER/g\" ./src/aws-exports.js",
+                                "sed -i \"s/PLACEHOLDER_ENTITY_SENTIMENT_FOLDER/$ENTITY_SENTIMENT_FOLDER/g\" ./src/aws-exports.js",
+                                "sed -i \"s/PLACEHOLDER_SUMMARY_FOLDER/$SUMMARY_FOLDER/g\" ./src/aws-exports.js",
+                                "sed -i \"s/PLACEHOLDER_REST_API_URL/$REST_API_URL/g\" ./src/aws-exports.js",
+                                "sed -i \"s/PLACEHOLDER_VIDEOS_API_RESOURCE/$VIDEOS_API_RESOURCE/g\" ./src/aws-exports.js",
+                                "npm run build"
+                            ]
+                        }
+                    },
+                    "artifacts": {
+                        "baseDirectory": "build",
+                        "files": [
+                            "**/*"
+                        ]
+                    },
+                    "cache": {
+                        "paths": [
+                            "node_modules/**/*"
+                        ]
+                    }
+                }
+            })
+        )
 
         # Role for custom resource lambda to create Cognito admin user
         cognito_user_setup_role = _iam.Role(
@@ -1162,7 +1220,7 @@ class VideoUnderstandingSolutionStack(Stack):
                 "url": f"https://{branch_name}.{ui_amplify_app.default_domain}"
             }
         )
-        
+        """
         amplify_build_trigger = _custom_resources.AwsCustomResource(self, 'TriggerAmplifyBuild',
             policy= _custom_resources.AwsCustomResourcePolicy.from_statements([
                     _iam.PolicyStatement(
@@ -1200,13 +1258,7 @@ class VideoUnderstandingSolutionStack(Stack):
         NagSuppressions.add_resource_suppressions(amplify_build_trigger, [
             { "id": 'AwsSolutions-IAM5', "reason": 'Allow the custom resource triggering the Amplify App build to use <arn>* to specify the job ID'},
         ], True)
-
-
-        # Add suppressions for using AWSLambdaBasicExecutionRole service managed role and for using the non-latest Lambda runtime as both are managed by CDK
-        NagSuppressions.add_resource_suppressions_by_path(self, "/VideoUnderstandingStack/AWS679f53fac002430cb0da5b7982bd2287", [
-            { "id": 'AwsSolutions-IAM4', "reason": 'Allow to use AWSLambdaBasicExecutionRole service managed role as this is managed by CDK'},
-            { "id": 'AwsSolutions-L1', "reason": 'As this is managed by CDK, allowing using the non-latest Lambda runtime.'}
-        ], True)
+        """
 
         # Suppress CDK rule on request validator. This resource contains GET request which does not have payload. Query string validator is in place. However, the rule is activated if payload validator is not there (link to implementation https://github.com/cdklabs/cdk-nag/blob/main/src/rules/apigw/APIGWRequestValidation.ts). Hence disabling the rule.
         NagSuppressions.add_resource_suppressions_by_path(self, "/VideoUnderstandingStack/RestAPI/Resource", [
@@ -1217,6 +1269,48 @@ class VideoUnderstandingSolutionStack(Stack):
         NagSuppressions.add_resource_suppressions_by_path(self, "/VideoUnderstandingStack/AnalyzerExecutionRole/Resource", [
             { "id": 'AwsSolutions-IAM5', "reason": 'Allow to use * for ECR and logs access'}
         ], True)
+
+        # Suppress cdk_nag rules to allow using service role and * in permission for the CDK-managed amplify asset deployment custom resource
+        NagSuppressions.add_resource_suppressions_by_path(self, "/VideoUnderstandingStack/com.amazonaws.cdk.custom-resources.amplify-asset-deployment-provider/amplify-asset-deployment-on-event/ServiceRole/Resource", [
+            { "id": 'AwsSolutions-IAM4', "reason": 'Allow using service role for the CDK-managed amplify asset deployment custom resource'},
+        ], True)
+        NagSuppressions.add_resource_suppressions_by_path(self, "/VideoUnderstandingStack/com.amazonaws.cdk.custom-resources.amplify-asset-deployment-provider/amplify-asset-deployment-on-event/ServiceRole/DefaultPolicy/Resource", [
+            { "id": 'AwsSolutions-IAM5', "reason": 'Allow using * in permission for the CDK-managed amplify asset deployment custom resource'},
+        ], True)
+        NagSuppressions.add_resource_suppressions_by_path(self, "/VideoUnderstandingStack/com.amazonaws.cdk.custom-resources.amplify-asset-deployment-provider/amplify-asset-deployment-is-complete/ServiceRole/Resource", [
+            { "id": 'AwsSolutions-IAM4', "reason": 'Allow using service role for the CDK-managed amplify asset deployment custom resource'},
+        ], True)
+        NagSuppressions.add_resource_suppressions_by_path(self, "/VideoUnderstandingStack/com.amazonaws.cdk.custom-resources.amplify-asset-deployment-provider/amplify-asset-deployment-is-complete/ServiceRole/DefaultPolicy/Resource", [
+            { "id": 'AwsSolutions-IAM5', "reason": 'Allow using * in permission for the CDK-managed amplify asset deployment custom resource'},
+        ], True)
+        NagSuppressions.add_resource_suppressions_by_path(self, "/VideoUnderstandingStack/com.amazonaws.cdk.custom-resources.amplify-asset-deployment-provider/amplify-asset-deployment-handler-provider/framework-onEvent/ServiceRole/Resource", [
+            { "id": 'AwsSolutions-IAM4', "reason": 'Allow using service role for the CDK-managed amplify asset deployment custom resource'},
+        ], True)
+        NagSuppressions.add_resource_suppressions_by_path(self, "/VideoUnderstandingStack/com.amazonaws.cdk.custom-resources.amplify-asset-deployment-provider/amplify-asset-deployment-handler-provider/framework-onEvent/ServiceRole/DefaultPolicy/Resource", [
+            { "id": 'AwsSolutions-IAM5', "reason": 'Allow using * in permission for the CDK-managed amplify asset deployment custom resource'},
+        ], True)
+        NagSuppressions.add_resource_suppressions_by_path(self, "/VideoUnderstandingStack/com.amazonaws.cdk.custom-resources.amplify-asset-deployment-provider/amplify-asset-deployment-handler-provider/framework-isComplete/ServiceRole/Resource", [
+            { "id": 'AwsSolutions-IAM4', "reason": 'Allow using service role for the CDK-managed amplify asset deployment custom resource'},
+        ], True)
+        NagSuppressions.add_resource_suppressions_by_path(self, "/VideoUnderstandingStack/com.amazonaws.cdk.custom-resources.amplify-asset-deployment-provider/amplify-asset-deployment-handler-provider/framework-isComplete/ServiceRole/DefaultPolicy/Resource", [
+            { "id": 'AwsSolutions-IAM5', "reason": 'Allow using * in permission for the CDK-managed amplify asset deployment custom resource'},
+        ], True)
+        NagSuppressions.add_resource_suppressions_by_path(self, "/VideoUnderstandingStack/com.amazonaws.cdk.custom-resources.amplify-asset-deployment-provider/amplify-asset-deployment-handler-provider/framework-onTimeout/ServiceRole/Resource", [
+            { "id": 'AwsSolutions-IAM4', "reason": 'Allow using service role for the CDK-managed amplify asset deployment custom resource'},
+        ], True)
+        NagSuppressions.add_resource_suppressions_by_path(self, "/VideoUnderstandingStack/com.amazonaws.cdk.custom-resources.amplify-asset-deployment-provider/amplify-asset-deployment-handler-provider/framework-onTimeout/ServiceRole/DefaultPolicy/Resource", [
+            { "id": 'AwsSolutions-IAM5', "reason": 'Allow using * in permission for the CDK-managed amplify asset deployment custom resource'},
+        ], True)
+        NagSuppressions.add_resource_suppressions_by_path(self, "/VideoUnderstandingStack/com.amazonaws.cdk.custom-resources.amplify-asset-deployment-provider/amplify-asset-deployment-handler-provider/waiter-state-machine/Role/DefaultPolicy/Resource", [
+            { "id": 'AwsSolutions-IAM5', "reason": 'Allow using * in permission for the CDK-managed amplify asset deployment custom resource'},
+        ], True)
+
+        # Suppress cdk_nag rule to allow not logging ALL and not using X-Ray tracing for the CDK-managed amplify asset deployment
+        NagSuppressions.add_resource_suppressions_by_path(self, "/VideoUnderstandingStack/com.amazonaws.cdk.custom-resources.amplify-asset-deployment-provider/amplify-asset-deployment-handler-provider/waiter-state-machine/Resource", [
+            { "id": 'AwsSolutions-SF1', "reason": 'Allow not logging ALL for tracing for the CDK-managed amplify asset uploader'},
+            { "id": 'AwsSolutions-SF2', "reason": 'Allow not using X-Ray for tracing for the CDK-managed amplify asset uploader'},
+        ], True)
+        
 
         CfnOutput(self, "bucket_name", value=video_bucket_s3.bucket_name)
         CfnOutput(self, "web_portal_url", value=f"https://{branch_name}.{ui_amplify_app.default_domain}")

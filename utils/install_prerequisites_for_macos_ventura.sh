@@ -70,11 +70,13 @@ nvm install v20.10.0
 nvm use 20.10.0
 
 node -e "console.log('Currently running Node.js ' + process.version)"
-sudo npm install -g aws-cdk@">=2.122.0"
+sudo npm install -g aws-cdk@">=2.163.0"
+sudo npm install -g @aws-cdk/aws-amplify-alpha@">=2.39.1-alpha.0"
 
-python3 -m pip install "aws-cdk-lib>=2.122.0"
-python3 -m pip install "aws-cdk.aws-amplify-alpha"
-python3 -m pip install "cdk-nag>=2.28.16"
+python3 -m pip install --upgrade pip
+python3 -m pip install --upgrade "aws-cdk-lib>=2.163.0"
+python3 -m pip install --upgrade "aws-cdk.aws-amplify-alpha"
+python3 -m pip install --upgrade "cdk-nag>=2.29.13"
 
 # Install Docker if not installed. It will be needed to build the code for the AWS Lambda functions during CDK deployment.
 if ! command -v docker &> /dev/null
