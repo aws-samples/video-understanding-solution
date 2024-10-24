@@ -64,29 +64,29 @@ def process_scene(timestamp, scene, segments, current_segment):
     if key_event and timestamp:
         if current_segment and current_segment['event'] == key_event:
             current_segment['end_time'] = float(timestamp) + 5.0
-        else:
+        else:           
             new_segment = {
                 'start_time': float(timestamp),
                 'end_time': float(timestamp) + 5.0,
-                'event': key_event
+                'event': key_event,
+                'score': data.get('highlight_score'),
             }
             segments.append(new_segment)
 
-
 def format_time(seconds):
-    return str(timedelta(seconds=int(seconds)))[2:7]
+    return str(timedelta(seconds=int(seconds)))[0:7]
 
 def save_merged_segments(segments, output_file):
     with open(output_file, 'w') as file:
         for segment in segments:
-            if segment['event'] == 'no_event':
+            if segment['event'] == 'no_event' or segment['end_time'] - segment['start_time'] < 10.0:
                 continue
             start = format_time(segment['start_time'])
             end = format_time(segment['end_time'])
-            file.write(f"{start} - {end}: {segment['event']}\n")
+            file.write(f"{start} - {end}: {segment['event']} {segment['score']}\n")
 
 # Usage
-input_file = r'C:\Users\fpengzha\Downloads\B_Highlights_Spain_vs_Italy___Semi_Final_UEFA_Nations_League_22_23.mp4 (3).txt'
+input_file = r'C:\Users\fpengzha\Downloads\Full_Spain_vs_Italy___Semi_Final_UEFA_Nations_League_22_23__1_.mp4 (5).txt'
 output_file = r'C:\Users\fpengzha\Downloads\segments.txt'
 
 segments = read_and_process_scenes(input_file)

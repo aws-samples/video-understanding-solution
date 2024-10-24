@@ -430,6 +430,25 @@ class VideoPreprocessor(ABC):
         with Pool(self.parallel_degree) as p:
             self.frame_bytes = list(p.map(self._extract_frame, regular_and_text_timestamps_millis))
         self.frame_bytes = list(filter(lambda f: f is not None, self.frame_bytes))
+        
+        # Generate images from frame_bytes and upload to S3
+        for frame in self.frame_bytes:
+            timestamp_millis, image_data = frame
+            
+            # Create a unique filename using the timestamp
+            filename = f"{timestamp_millis}.jpg"
+            
+            try:
+                # Upload the image to S3
+                self.s3_client.put_object(
+                    Bucket=self.bucket_name,
+                    Key=f"frames/{filename}",
+                    Body=image_data,
+                    ContentType='image/jpeg'
+                )
+                logging.info(f"Uploaded frame {filename} to S3")
+            except Exception as e:
+                logging.error(f"Error uploading frame {filename} to S3: {str(e)}")
 
         with Pool(self.parallel_degree) as p:
             self.person_frame_bytes = list(p.map(self._extract_frame, person_timestamps_millis))
