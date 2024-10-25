@@ -79,7 +79,7 @@ def format_time(seconds):
 def save_merged_segments(segments, output_file):
     with open(output_file, 'w') as file:
         for segment in segments:
-            if segment['event'] == 'no_event' or segment['end_time'] - segment['start_time'] < 10.0:
+            if segment['event'] == 'no_event' or segment['end_time'] - segment['start_time'] <= 10.0:
                 continue
             start = format_time(segment['start_time'])
             end = format_time(segment['end_time'])

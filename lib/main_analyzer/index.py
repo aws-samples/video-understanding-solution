@@ -13,6 +13,7 @@ import concurrent.futures
 from multiprocessing import Pool
 import itertools
 import logging
+import numpy as np
 
 CONFIG_LABEL_DETECTION_ENABLED = "label_detection_enabled"
 CONFIG_TRANSCRIPTION_ENABLED = "transcription_enabled"
@@ -371,24 +372,45 @@ class VideoPreprocessor(ABC):
 
 
     def _extract_frame(self, timestamp_millis):
-        video = self.load_video(self.video_filename)
-        video.set(cv2.CAP_PROP_POS_MSEC, int(timestamp_millis))
-        success, frame = video.read()
-        if success:
-            # Resize frame to 512 x 512 px
-            dim = self.frame_dim_for_vqa
-            # This may fail if the frame is empty. Just skip the frame if so.
-            try:
-                frame = cv2.resize(frame, dim, interpolation = cv2.INTER_AREA)
-            except:
-                return None
+        try:
+            # Construct the S3 key for the image
+            s3_key = f"frames/{timestamp_millis}.jpg"
+            
+            # Get the object from S3
+            response = self.s3_client.get_object(Bucket=self.bucket_name, Key=s3_key)
+            
+            # Read the image data
+            image_data = response['Body'].read()
+            
+            # Convert the image data to a PIL Image
+            image_pil = Image.open(io.BytesIO(image_data))
+            
+            # Convert PIL Image to OpenCV format
+            frame = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
+            
+            return [timestamp_millis, cv2.imencode('.jpg', frame)[1].tobytes()]
+        except Exception as e:
+            print(f"Error reading image from S3: {e}")
+            return None
         
-            image_pil = Image.fromarray(frame)
-            io_stream = io.BytesIO()
-            image_pil.save(io_stream, format='JPEG')
-            image = io_stream.getvalue()
-            return [timestamp_millis, image]
-        del video
+        # video = self.load_video(self.video_filename)
+        # video.set(cv2.CAP_PROP_POS_MSEC, int(timestamp_millis))
+        # success, frame = video.read()
+        # if success:
+        #     # Resize frame to 512 x 512 px
+        #     dim = self.frame_dim_for_vqa
+        #     # This may fail if the frame is empty. Just skip the frame if so.
+        #     try:
+        #         frame = cv2.resize(frame, dim, interpolation = cv2.INTER_AREA)
+        #     except:
+        #         return None
+        
+        #     image_pil = Image.fromarray(frame)
+        #     io_stream = io.BytesIO()
+        #     image_pil.save(io_stream, format='JPEG')
+        #     image = io_stream.getvalue()
+        #     return [timestamp_millis, image]
+        # del video
 
     def extract_frames(self):
         # Create a list containing milliseconds where frame should be extracted from the video, according to the interval.
@@ -432,23 +454,23 @@ class VideoPreprocessor(ABC):
         self.frame_bytes = list(filter(lambda f: f is not None, self.frame_bytes))
         
         # Generate images from frame_bytes and upload to S3
-        for frame in self.frame_bytes:
-            timestamp_millis, image_data = frame
+        # for frame in self.frame_bytes:
+        #     timestamp_millis, image_data = frame
             
-            # Create a unique filename using the timestamp
-            filename = f"{timestamp_millis}.jpg"
+        #     # Create a unique filename using the timestamp
+        #     filename = f"{timestamp_millis}.jpg"
             
-            try:
-                # Upload the image to S3
-                self.s3_client.put_object(
-                    Bucket=self.bucket_name,
-                    Key=f"frames/{filename}",
-                    Body=image_data,
-                    ContentType='image/jpeg'
-                )
-                logging.info(f"Uploaded frame {filename} to S3")
-            except Exception as e:
-                logging.error(f"Error uploading frame {filename} to S3: {str(e)}")
+        #     try:
+        #         # Upload the image to S3
+        #         self.s3_client.put_object(
+        #             Bucket=self.bucket_name,
+        #             Key=f"frames/{filename}",
+        #             Body=image_data,
+        #             ContentType='image/jpeg'
+        #         )
+        #         logging.info(f"Uploaded frame {filename} to S3")
+        #     except Exception as e:
+        #         logging.error(f"Error uploading frame {filename} to S3: {str(e)}")
 
         with Pool(self.parallel_degree) as p:
             self.person_frame_bytes = list(p.map(self._extract_frame, person_timestamps_millis))

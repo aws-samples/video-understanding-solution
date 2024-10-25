@@ -75,7 +75,7 @@ def process_segments(input_file, segments_file, output_folder):
         
         clip_success = False;
         # Clip the video segment
-        if (int(score) >= 95):
+        if (int(score) >= 0 and duration <= 15):
             clip_success = clip_video(input_file, output_file, start, str(duration))
         
         if clip_success:
@@ -131,7 +131,7 @@ def stitch_videos(video_files, output_file):
 # Example usage:
 input_file = r"C:\Users\fpengzha\Downloads\Full Spain vs Italy _ Semi Final UEFA Nations League 22_23 (1).mp4"
 segments_file = r"C:\Users\fpengzha\Downloads\segments.txt"
-output_folder = r"C:\Users\fpengzha\Downloads\clipped_segments"
+output_folder = r"C:\Users\fpengzha\Downloads\segments"
 
 process_segments(input_file, segments_file, output_folder)
 
