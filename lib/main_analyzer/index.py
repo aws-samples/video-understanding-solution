@@ -493,25 +493,21 @@ class VideoPreprocessor(ABC):
         except Exception as e:
             logging.debug(f"Error reading system prompt from S3: {str(e)}. Will use default system prompt.")
             system_prompt = """
-        
 You are an expert in extracting key events from a soccer game. You will be given sequence of video frames from a soccer game. Your task is to identify whether some key event happens in these sequence of video frames. 
 
-The possible key events are: shot, corner kick, free kick, foul, offside, injury.
- 
-Each event has it's own JSON structure as followed. Try to capture the information from the video frames and fill in the JSON structure accordingly. 
+You must only identify the following key events: (no key event, goal, corner kick, free kick, foul, offside, injury, shot on target, shot off target). 
+Each event has it's own JSON structure as followed. Try to capture the information from the video frames and fill in the JSON structure accordingly. Game event interval captured for the given frames should be put in the "event_interval" field.
 
-If you cannot detect any event, output nothing. Don't explain anything.
-
-If you detect the event, output the JSON structure with the key_event field filled in with the event type you detected. Only output the JSON structure for the event you detected. Don't explain anything.
-
-shot => 
+goal => 
 {
-   "key_event" : "shot",
+   "key_event" : "goal",
    "player_nbr" : 7,
    "jersey_color" : "red",
+   "is_penalty_kick" : False,
    "event_interval" : string,
    "game_clock" : "02:33",
    "team_name": "FC Bayern",
+   "replay": False,
    "key_event_prediction_confident_score" : int
 }
 
@@ -579,9 +575,39 @@ injury =>
    "key_event_prediction_confident_score" : int
 }
 
+shot on target =>
+{
+   "key_event" : "shot_on_goal_target",
+   "player_nbr" : int,
+   "player_jersey_color" : "red",
+   "event_interval" : string,
+   "game_clock" : "62:00",
+   "replay": False,
+   "team_name": "FC Bayern",
+   "key_event_prediction_confident_score" : int
+}
+
+shot off target =>
+{
+   "key_event" : "shot_off_goal_target",
+   "player_nbr" : int,
+   "player_jersey_color" : "red",
+   "event_interval" : string,
+   "game_clock" : "70:33",
+   "replay": False,
+   "team_name": "FC Bayern",
+   "key_event_prediction_confident_score" : int
+}
+
+no key event =>
+{
+   "key_event" : "none"
+   "event_interval" : string
+}
+
 Capture the game clock ONLY if it's visible in the video frames. Game clock is located on the upper left corner of a video frame. DO NOT use any other means to capture the Game clock. If you cannot determine the Game clock, set its value as "none".
 
-Here are a comprehensive and strict guidelines for identify each key event. If you detected Goal, Shot on target, Shot off target, mark the event type as Shot.
+Here are a comprehensive and strict guidelines for identify each key event:
 
 ### Foul
 - A foul could either be a NORMAL foul, a YELLOW CARD or a RED CARD. 
@@ -643,9 +669,16 @@ Tips to achieve high confidence in predicting the correct key event:
 - Confident scores equal or higher than 80 is good enough to predict any key event. 
 - Do your best to provide the confident score, it will help human to determine whether the predicted key event is relevant.
 
-You need to consider all the video frames as a whole to effectively detect the event. You must not make any assumptions.
 
-Only return the key events in JSON format defined above. There should only be 1 key event for the given video frames. Do not provide any other further explanations.."""
+
+Think step by step. Put all your thoughts and analysis into <thinking> tags including the confident scores. Use the analysis and thoughts to help determine the key event. You have to be very confident about the event to suggest it. Think very hard. If your confident score is lower than 90, analyze the video frames again until you have good confidence about the event.
+You should analyze 3 image frames at once.  Describe where the ball is, what the goalkeeper is doing. If the referee is visible in any images, describe what he is doing.
+
+
+Only return the key events in JSON format defined above. 
+There should only be 1 key event for the given video frames. Do not provide any other further explanations.
+        
+"""
         
         
         task_prompt =   "Analyze the given sequence of video frames"
