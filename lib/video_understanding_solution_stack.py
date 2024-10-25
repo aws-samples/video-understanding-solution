@@ -590,7 +590,8 @@ class VideoUnderstandingSolutionStack(Stack):
                                 video_bucket_s3.arn_for_objects(f"{summary_folder}/*"),
                                 video_bucket_s3.arn_for_objects(f"{video_script_folder}/*"),
                                 video_bucket_s3.arn_for_objects(f"{video_caption_folder}/*"),
-                                video_bucket_s3.arn_for_objects(f"{entity_sentiment_folder}/*")
+                                video_bucket_s3.arn_for_objects(f"{entity_sentiment_folder}/*"),
+                                video_bucket_s3.arn_for_objects(f"frames/*") #TODO: DELETE
                             ],
                             effect=_iam.Effect.ALLOW,
                         ),
