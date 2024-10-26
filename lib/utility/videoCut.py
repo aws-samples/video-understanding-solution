@@ -45,11 +45,7 @@ def read_segments(segments_file):
                 times, event = parts
                 start, end = times.split(' - ')
                 
-                event_parts = event.split(' ', 1)
-                event_type = event_parts[0]
-                event_score = event_parts[1] if len(event_parts) > 1 else ""
-                
-                segments.append((start, end, event_type, event_score))
+                segments.append((start, end, event))
     return segments
 
 def process_segments(input_file, segments_file, output_folder):
@@ -63,7 +59,7 @@ def process_segments(input_file, segments_file, output_folder):
         
     clipped_segments = []
     
-    for i, (start, end, event, score) in enumerate(segments):
+    for i, (start, end, event) in enumerate(segments):
         output_file = os.path.join(output_folder, f"clip_{i+1}_{event.replace(' ', '_')}.mp4")
         
         # Calculate duration
@@ -75,8 +71,7 @@ def process_segments(input_file, segments_file, output_folder):
         
         clip_success = False;
         # Clip the video segment
-        if (int(score) >= 0 and duration <= 15):
-            clip_success = clip_video(input_file, output_file, start, str(duration))
+        clip_success = clip_video(input_file, output_file, start, str(duration))
         
         if clip_success:
             # Add the clipped segment to a list for later stitching
