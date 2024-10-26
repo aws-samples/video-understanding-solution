@@ -580,7 +580,8 @@ class VideoUnderstandingSolutionStack(Stack):
                             resources=[
                                 video_bucket_s3.bucket_arn, 
                                 video_bucket_s3.arn_for_objects(f"{transcription_folder}/*"),
-                                video_bucket_s3.arn_for_objects(f"{raw_folder}/*")
+                                video_bucket_s3.arn_for_objects(f"{raw_folder}/*"),
+                                video_bucket_s3.arn_for_objects(f"frames/*") #TODO: DELETE
                             ],
                             effect=_iam.Effect.ALLOW,
                         ),
