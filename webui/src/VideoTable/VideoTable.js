@@ -732,7 +732,6 @@ export class VideoTable extends Component {
           </Accordion.Item>
         ) 
       })
-       
   }
 
   async handlePageClick(index){

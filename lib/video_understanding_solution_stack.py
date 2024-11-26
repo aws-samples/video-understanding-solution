@@ -16,6 +16,7 @@ from aws_cdk import (
     aws_ecs as _ecs,
     aws_logs as _logs,
     aws_ssm as _ssm,
+    aws_kms as _kms,
     aws_stepfunctions as _sfn,
     aws_stepfunctions_tasks as _sfn_tasks,
     aws_codebuild as _codebuild,
@@ -259,11 +260,11 @@ class VideoUnderstandingSolutionStack(Stack):
         # Lambda for setting up database
         db_setup_event_handler = _lambda.Function(self, "DatabaseSetupHandler",
             function_name=f"{construct_id}-DatabaseSetupHandler",
-            runtime=_lambda.Runtime.PYTHON_3_12,
+            runtime=_lambda.Runtime.PYTHON_3_13,
             timeout=Duration.minutes(1),
             code=_lambda.Code.from_asset('./lib/db_setup_lambda',
                 bundling= BundlingOptions(
-                  image= _lambda.Runtime.PYTHON_3_12.bundling_image,
+                  image= _lambda.Runtime.PYTHON_3_13.bundling_image,
                   command= [
                     'bash',
                     '-c',
@@ -360,10 +361,10 @@ class VideoUnderstandingSolutionStack(Stack):
         preprocessing_lambda = _lambda.Function(self, "PreprocessingLambda",
             function_name=f"{construct_id}-preprocessing",
             handler='index.handler',
-            runtime=_lambda.Runtime.PYTHON_3_12,
+            runtime=_lambda.Runtime.PYTHON_3_13,
             code=_lambda.Code.from_asset('./lib/preprocessing_lambda', 
                 bundling= BundlingOptions(
-                    image= _lambda.Runtime.PYTHON_3_12.bundling_image,
+                    image= _lambda.Runtime.PYTHON_3_13.bundling_image,
                     command= [
                     'bash',
                     '-c',
@@ -939,10 +940,10 @@ class VideoUnderstandingSolutionStack(Stack):
             role=video_search_role,
             function_name=f"{construct_id}-videos-search",
             handler='lambda-handler.handler',
-            runtime=_lambda.Runtime.PYTHON_3_12,
+            runtime=_lambda.Runtime.PYTHON_3_13,
             code=_lambda.Code.from_asset('./lib/videos_search',
                 bundling= BundlingOptions(
-                image= _lambda.Runtime.PYTHON_3_12.bundling_image,
+                image= _lambda.Runtime.PYTHON_3_13.bundling_image,
                 command= [
                     'bash',
                     '-c',
@@ -1044,34 +1045,76 @@ class VideoUnderstandingSolutionStack(Stack):
 
 
 
-        # CodeCommit repo
-        #repo_name = f"video-understanding-{int(time.time())}"
         branch_name = "main"
         webui_path = f"{BASE_DIR}/webui/"
         webui_zip_file_name = [i for i in os.listdir(webui_path) if os.path.isfile(os.path.join(webui_path,i)) and i.startswith("ui_repo")][0]
-
-        """
-        repo = _codecommit.Repository(
-          self,
-          "VideoUnderstandingRepo",
-          repository_name=repo_name,
-          description="CodeCommit repository for the video understanding solution's UI",
-          code=_codecommit.Code.from_zip_file(
-                f"{webui_path}{webui_zip_file_name}",
-                branch=branch_name,
-          ),
-        )
-        """
-
+        
         ui_asset = _s3_assets.Asset(self, "UIAsset", 
             path= f"{webui_path}{webui_zip_file_name}",
-            #path= f"{webui_path}"
+        )
+
+        ui_artifacts_bucket = _s3.Bucket(self, "PipelineArtifactsBucket",
+            removal_policy=RemovalPolicy.DESTROY,
+            auto_delete_objects=True,
+            encryption=_s3.BucketEncryption.S3_MANAGED,
+            server_access_logs_prefix="access_logs/",
+            enforce_ssl=True,
+            block_public_access=_s3.BlockPublicAccess.BLOCK_ALL,
+        )
+
+        ui_artifacts_bucket.add_to_resource_policy(
+            _iam.PolicyStatement(
+                actions=["s3:*"],
+                resources=[
+                    ui_artifacts_bucket.bucket_arn,
+                    f"{ui_artifacts_bucket.bucket_arn}/*"
+                ],
+                principals=[_iam.ServicePrincipal("amplify.amazonaws.com")]
+            )
         )
 
         build_project = _codebuild.Project(self, "UIBuild",
             environment=_codebuild.BuildEnvironment(
                 build_image=_codebuild.LinuxBuildImage.STANDARD_7_0
             ),
+            build_spec = _codebuild.BuildSpec.from_object({
+                "version": "0.2",
+                "phases": {
+                    "pre_build": {
+                        "commands": [
+                            'node -e "console.log(\'Currently running Node.js \' + process.version)"',
+                            "npm ci"
+                        ]
+                    },
+                    "build": {
+                        "commands": [
+                            'sed -i "s/PLACEHOLDER_REGION/$REGION/g" ./src/aws-exports.js',
+                            'sed -i "s/PLACEHOLDER_COGNITO_REGION/$REGION/g" ./src/aws-exports.js',
+                            'sed -i "s/PLACEHOLDER_IDENTITY_POOL_ID/$AMPLIFY_IDENTITYPOOL_ID/g" ./src/aws-exports.js',
+                            'sed -i "s/PLACEHOLDER_USER_POOL_ID/$AMPLIFY_USERPOOL_ID/g" ./src/aws-exports.js',
+                            'sed -i "s/PLACEHOLDER_USER_POOL_WEB_CLIENT_ID/$AMPLIFY_WEBCLIENT_ID/g" ./src/aws-exports.js',
+                            'sed -i "s/PLACEHOLDER_BUCKET_NAME/$BUCKET_NAME/g" ./src/aws-exports.js',
+                            'sed -i "s/PLACEHOLDER_FAST_MODEL_ID/$FAST_MODEL_ID/g" ./src/aws-exports.js',
+                            'sed -i "s/PLACEHOLDER_BALANCED_MODEL_ID/$BALANCED_MODEL_ID/g" ./src/aws-exports.js',
+                            'sed -i "s/PLACEHOLDER_RAW_FOLDER/$RAW_FOLDER/g" ./src/aws-exports.js',
+                            'sed -i "s/PLACEHOLDER_VIDEO_SCRIPT_FOLDER/$VIDEO_SCRIPT_FOLDER/g" ./src/aws-exports.js',
+                            'sed -i "s/PLACEHOLDER_VIDEO_CAPTION_FOLDER/$VIDEO_CAPTION_FOLDER/g" ./src/aws-exports.js',
+                            'sed -i "s/PLACEHOLDER_TRANSCRIPTION_FOLDER/$TRANSCRIPTION_FOLDER/g" ./src/aws-exports.js',
+                            'sed -i "s/PLACEHOLDER_ENTITY_SENTIMENT_FOLDER/$ENTITY_SENTIMENT_FOLDER/g" ./src/aws-exports.js',
+                            'sed -i "s/PLACEHOLDER_SUMMARY_FOLDER/$SUMMARY_FOLDER/g" ./src/aws-exports.js',
+                            'sed -i "s/PLACEHOLDER_REST_API_URL/$REST_API_URL/g" ./src/aws-exports.js',
+                            'sed -i "s/PLACEHOLDER_VIDEOS_API_RESOURCE/$VIDEOS_API_RESOURCE/g" ./src/aws-exports.js',
+                            "npm run build"
+                        ]
+                    }
+                },
+                "artifacts": {
+                    "base-directory": "build",
+                    "files": [
+                        "**/*"
+                    ]
+                }
+            }),
             environment_variables={
                 "AMPLIFY_USERPOOL_ID": _codebuild.BuildEnvironmentVariable(value=user_pool.user_pool_id),
                 "AMPLIFY_WEBCLIENT_ID": _codebuild.BuildEnvironmentVariable(value=user_pool_client.user_pool_client_id),
@@ -1083,22 +1126,105 @@ class VideoUnderstandingSolutionStack(Stack):
                 "RAW_FOLDER": _codebuild.BuildEnvironmentVariable(value=raw_folder),
                 "VIDEO_SCRIPT_FOLDER": _codebuild.BuildEnvironmentVariable(value=video_script_folder),
                 "VIDEO_CAPTION_FOLDER": _codebuild.BuildEnvironmentVariable(value=video_caption_folder),
-                "TRANSCRIPTION_FOLDER": _codebuild.BuildEnvironmentVariable(value=transcription_folder.replace("/","/")),
+                "TRANSCRIPTION_FOLDER": _codebuild.BuildEnvironmentVariable(value=transcription_folder.replace("/","\/")),
                 "ENTITY_SENTIMENT_FOLDER": _codebuild.BuildEnvironmentVariable(value=entity_sentiment_folder),
                 "SUMMARY_FOLDER": _codebuild.BuildEnvironmentVariable(value=summary_folder),
-                "REST_API_URL": _codebuild.BuildEnvironmentVariable(value=self.rest_api_url.replace("/","/")),
+                "REST_API_URL": _codebuild.BuildEnvironmentVariable(value=self.rest_api_url.replace("/","\/")),
                 "VIDEOS_API_RESOURCE": _codebuild.BuildEnvironmentVariable(value=videos_api_resource)
             }
         )
 
-        ui_artifacts_bucket = _s3.Bucket(self, "PipelineArtifactsBucket",
-            removal_policy=RemovalPolicy.DESTROY,
-            auto_delete_objects=True,
-            encryption=_s3.BucketEncryption.S3_MANAGED
+        # Suppress cdk_nag rule to allow * in the CodeBuild role
+        NagSuppressions.add_resource_suppressions(build_project, [
+            { "id": 'AwsSolutions-IAM5', "reason": 'Allow to use * in the IAM policies for the default CodeBuild role.'}
+        ], True)
+         # Suppress cdk_nag rule to allow using default S3 encryption on the build arfifact rather than using custom KMS key
+        NagSuppressions.add_resource_suppressions(build_project, [
+            { "id": 'AwsSolutions-CB4', "reason": 'allow using default S3 encryption on the build arfifact rather than using custom KMS key.'}
+        ], True)
+
+        ui_amplify_app = _amplify.App(self, "VideoUnderstandingSolutionUIApp")
+        master_branch = ui_amplify_app.add_branch(branch_name)
+
+        amplify_deploy_role = _iam.Role(
+            self, "AmplifyDeployRole",
+            assumed_by=_iam.ServicePrincipal("lambda.amazonaws.com"),
+            inline_policies={
+                "AmplifyDeployPolicy": _iam.PolicyDocument(
+                    statements=[
+                        _iam.PolicyStatement(
+                            actions=[
+                                "amplify:StartDeployment",
+                            ],
+                            resources=[
+                                f"arn:aws:amplify:{aws_region}:{aws_account_id}:apps/{ui_amplify_app.app_id}/branches/{master_branch.branch_name}/*",
+                            ]
+                        )
+                    ]
+                ),
+                "AmplifyDeployAccessS3": _iam.PolicyDocument(
+                    statements=[
+                        _iam.PolicyStatement(
+                            actions=[
+                                "s3:PutObject",
+                                "s3:GetObjectAcl",
+                                "s3:GetObject",
+                                "s3:PutObjectVersionAcl",
+                                "s3:ListBucket",
+                                "s3:DeleteObject",
+                                "s3:PutObjectAcl"
+                            ],
+                            resources=[
+                                f"{ui_artifacts_bucket.bucket_arn}/*",
+                                f"{ui_artifacts_bucket.bucket_arn}"
+                            ]
+                        )
+                    ]
+                ),
+                "CallCodePipeline": _iam.PolicyDocument(
+                    statements=[
+                        _iam.PolicyStatement(
+                            actions=[
+                                "codepipeline:PutJobSuccessResult",
+                                "codepipeline:PutJobFailureResult"
+                            ],
+                            resources=["*"]
+                        )
+                    ]
+                ),
+            },
+            managed_policies=[
+                _iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSLambdaBasicExecutionRole")
+            ]
         )
 
-        artifacts_bucket_name = ui_artifacts_bucket.bucket_name
-        artifacts_key_prefix = f"{pipeline.pipeline_name}/BuildOutput"
+        NagSuppressions.add_resource_suppressions(amplify_deploy_role, [
+            {
+                "id": "AwsSolutions-IAM5", 
+                "reason": "Amplify deploy requires access to all branches",
+            }
+        ])
+
+        amplify_deploy_function = _lambda.Function(
+            self, "AmplifyDeployFunction",
+            runtime=_lambda.Runtime.PYTHON_3_13,
+            handler="index.handler",
+            code=_lambda.Code.from_asset('./lib/amplify_deploy_lambda',
+                bundling= BundlingOptions(
+                image= _lambda.Runtime.PYTHON_3_13.bundling_image,
+                command= [
+                    'bash',
+                    '-c',
+                    'pip install --platform manylinux2014_x86_64 --only-binary=:all: -r requirements.txt -t /asset-output && cp -au . /asset-output',
+                ],
+                )
+            ),  
+            role=amplify_deploy_role,
+            environment={
+                "AMPLIFY_APP_ID": ui_amplify_app.app_id,
+                "BRANCH_NAME": branch_name
+            }
+        )
 
         pipeline = _codepipeline.Pipeline(self, "UIDeployPipeline",
             artifact_bucket=ui_artifacts_bucket,
@@ -1124,56 +1250,45 @@ class VideoUnderstandingSolutionStack(Stack):
                             outputs=[_codepipeline.Artifact("BuildOutput")]
                         )
                     ]
+                ),
+                _codepipeline.StageProps(
+                    stage_name="DeployToS3",
+                    actions=[
+                        _codepipeline_actions.S3DeployAction(
+                            action_name="S3Deploy",
+                            input=_codepipeline.Artifact("BuildOutput"),
+                            bucket=ui_artifacts_bucket,
+                            object_key="live",
+                            extract=True
+                        )
+                    ]
+                ),
+                _codepipeline.StageProps(
+                    stage_name="DeployToAmplify",
+                    actions=[
+                        _codepipeline_actions.LambdaInvokeAction(
+                            action_name="InvokeAmplifyDeploy",
+                            lambda_=amplify_deploy_function,
+                            user_parameters={
+                                "bucket_name": ui_artifacts_bucket.bucket_name,
+                                "prefix": "live"
+                            }
+                        )
+                    ]
                 )
             ]
         )
-        
-        ui_asset.grant_read(build_project.role)
 
         # Suppress cdk_nag rule to allow <Arn>* in the IAM policy as the video file names can vary
         NagSuppressions.add_resource_suppressions(auth_role, [
             { "id": 'AwsSolutions-IAM5', "reason": 'The <arn>* is needed in the IAM policy to allow variety of file names in S3 bucket.'}
         ], True)
 
-        ui_amplify_app = _amplify.App(self, "VideoUnderstandingSolutionUIApp")
-        master_branch = ui_amplify_app.add_branch(branch_name)
+  
 
-        deploy_to_amplify = _custom_resources.AwsCustomResource(self, 'DeployToAmplify',
-            policy=_custom_resources.AwsCustomResourcePolicy.from_statements([
-                _iam.PolicyStatement(
-                    actions=[
-                        "amplify:StartDeployment",
-                        "amplify:CreateDeployment",
-                        "s3:GetObject"
-                    ],
-                    resources=[
-                        f"arn:aws:amplify:{aws_region}:{aws_account_id}:apps/{ui_amplify_app.app_id}/branches/{master_branch.branch_name}/*",
-                        f"{ui_artifacts_bucket.bucket_arn}/*"
-                    ],
-                    effect=_iam.Effect.ALLOW,
-                ),
-            ]),
-            on_create=_custom_resources.AwsSdkCall(
-                service='Amplify',
-                action='createDeployment',
-                physical_resource_id=_custom_resources.PhysicalResourceId.of('amplify-deployment'),
-                parameters={
-                    "appId": ui_amplify_app.app_id,
-                    "branchName": branch_name,
-                    "sourceUrl": f"s3://{artifacts_bucket_name}/{artifacts_key_prefix}/build.zip"
-                }
-            ),
-            on_update=_custom_resources.AwsSdkCall(
-                service='Amplify',
-                action='createDeployment',
-                physical_resource_id=_custom_resources.PhysicalResourceId.of('amplify-deployment'),
-                parameters={
-                    "appId": ui_amplify_app.app_id,
-                    "branchName": branch_name,
-                    "sourceUrl": f"s3://{artifacts_bucket_name}/{artifacts_key_prefix}/build.zip"
-                }
-            )
-        )
+        NagSuppressions.add_resource_suppressions(amplify_deploy_role, [
+            { "id": 'AwsSolutions-IAM4', "reason": 'Allow using AWSLambdaBasicExecutionRole managed role'},
+        ], True)
 
         # Role for custom resource lambda to create Cognito admin user
         cognito_user_setup_role = _iam.Role(
@@ -1207,8 +1322,6 @@ class VideoUnderstandingSolutionStack(Stack):
             ],
         )
 
-        deploy_to_amplify.node.add_dependency(pipeline)
-
         # Suppress cdk_nag rule to allow using AWSLambdaBasicExecutionRole service managed role.
         NagSuppressions.add_resource_suppressions(cognito_user_setup_role, [
             { "id": 'AwsSolutions-IAM4', "reason": 'Allowing the use of AWSLambdaBasicExecutionRole service managed role'},
@@ -1218,7 +1331,7 @@ class VideoUnderstandingSolutionStack(Stack):
             scope=self,
             id="CognitoUserSetupLambda",
             function_name=f"CognitoUserSetupLambda",
-            runtime=_lambda.Runtime.PYTHON_3_12,
+            runtime=_lambda.Runtime.PYTHON_3_13,
             code=_lambda.Code.from_asset("./lib/cognito_user_setup"),
             handler="index.on_event",
             role=cognito_user_setup_role,
@@ -1252,51 +1365,6 @@ class VideoUnderstandingSolutionStack(Stack):
                 "url": f"https://{branch_name}.{ui_amplify_app.default_domain}"
             }
         )
-        
-        amplify_build_trigger = _custom_resources.AwsCustomResource(self, 'TriggerAmplifyBuild',
-            policy= _custom_resources.AwsCustomResourcePolicy.from_statements([
-                    _iam.PolicyStatement(
-                        actions=["amplify:StartJob"],
-                        resources=[f"arn:aws:amplify:{aws_region}:{aws_account_id}:apps/{ui_amplify_app.app_id}/branches/{master_branch.branch_name}/jobs/*"],
-                        effect=_iam.Effect.ALLOW,
-                    ),
-                ],
-            ),
-            on_create=_custom_resources.AwsSdkCall(
-                service='Amplify',
-                action='startJob',
-                physical_resource_id= _custom_resources.PhysicalResourceId.of('trigger-amplify-build'),
-                parameters= {
-                    "appId": ui_amplify_app.app_id,
-                    "branchName": branch_name,
-                    "jobType": 'RELEASE',
-                    "jobReason": 'Trigger app build on create',
-                }
-            ),
-            on_update=_custom_resources.AwsSdkCall(
-                service='Amplify',
-                action='startJob',
-                physical_resource_id= _custom_resources.PhysicalResourceId.of('trigger-amplify-build'),
-                parameters= {
-                    "appId": ui_amplify_app.app_id,
-                    "branchName": branch_name,
-                    "jobType": 'RELEASE',
-                    "jobReason": 'Trigger app build on update',
-                }
-            ),
-        )
-
-        # Suppress cdk_nag rule to allow the custom resource triggering the Amplify App build to use <arn>* to specify the job ID
-        NagSuppressions.add_resource_suppressions(amplify_build_trigger, [
-            { "id": 'AwsSolutions-IAM5', "reason": 'Allow the custom resource triggering the Amplify App build to use <arn>* to specify the job ID'},
-        ], True)
-
-
-        # Add suppressions for using AWSLambdaBasicExecutionRole service managed role and for using the non-latest Lambda runtime as both are managed by CDK
-        NagSuppressions.add_resource_suppressions_by_path(self, "/VideoUnderstandingStack/AWS679f53fac002430cb0da5b7982bd2287", [
-            { "id": 'AwsSolutions-IAM4', "reason": 'Allow to use AWSLambdaBasicExecutionRole service managed role as this is managed by CDK'},
-            { "id": 'AwsSolutions-L1', "reason": 'As this is managed by CDK, allowing using the non-latest Lambda runtime.'}
-        ], True)
 
         # Suppress CDK rule on request validator. This resource contains GET request which does not have payload. Query string validator is in place. However, the rule is activated if payload validator is not there (link to implementation https://github.com/cdklabs/cdk-nag/blob/main/src/rules/apigw/APIGWRequestValidation.ts). Hence disabling the rule.
         NagSuppressions.add_resource_suppressions_by_path(self, "/VideoUnderstandingStack/RestAPI/Resource", [
@@ -1308,7 +1376,25 @@ class VideoUnderstandingSolutionStack(Stack):
             { "id": 'AwsSolutions-IAM5', "reason": 'Allow to use * for ECR and logs access'}
         ], True)
 
+        NagSuppressions.add_resource_suppressions_by_path(self, "/VideoUnderstandingStack/UIDeployPipeline/Role/DefaultPolicy/Resource", [
+            { "id": "AwsSolutions-IAM5", "reason": "Pipeline requires these permissions for artifact management"}
+        ])
+
+        NagSuppressions.add_resource_suppressions_by_path(self, "/VideoUnderstandingStack/UIDeployPipeline/Source/S3Source/CodePipelineActionRole/DefaultPolicy/Resource", [
+            {"id": "AwsSolutions-IAM5", "reason": "S3 Source action requires these permissions for artifact management"}
+        ])
+
+        NagSuppressions.add_resource_suppressions_by_path(self, "/VideoUnderstandingStack/UIDeployPipeline/DeployToAmplify/InvokeAmplifyDeploy/CodePipelineActionRole/DefaultPolicy/Resource", [
+            {"id": "AwsSolutions-IAM5", "reason": "Amplify Deploy action requires these permissions for artifact management"}
+        ])
+
+        NagSuppressions.add_resource_suppressions_by_path(self, "/VideoUnderstandingStack/UIDeployPipeline/DeployToS3/S3Deploy/CodePipelineActionRole/DefaultPolicy/Resource", [
+            {"id": "AwsSolutions-IAM5", "reason": "S3 Deploy action requires these permissions for artifact management"}
+        ])
+
+        NagSuppressions.add_resource_suppressions_by_path(self, "/VideoUnderstandingStack/AmplifyDeployRole/DefaultPolicy/Resource", [
+            {"id": "AwsSolutions-IAM5", "reason": "Allowing S3 access for Lambda to deploy to Amplify with the wildcard use"}
+        ])
+
         CfnOutput(self, "bucket_name", value=video_bucket_s3.bucket_name)
         CfnOutput(self, "web_portal_url", value=f"https://{branch_name}.{ui_amplify_app.default_domain}")
-        
-

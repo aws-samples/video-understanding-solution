@@ -99,9 +99,11 @@ def on_create(event):
 def on_update(event):
     physical_id = event["PhysicalResourceId"]
     print("no op")
-    return {'PhysicalResourceId': physical_id}
+    #return {'PhysicalResourceId': physical_id}
+    return {'PhysicalResourceId': "VectorDBDatabaseSetup"}
 
 def on_delete(event):
     physical_id = event["PhysicalResourceId"]
     print("no op")
-    return {'PhysicalResourceId': physical_id}
+    #return {'PhysicalResourceId': physical_id}
+    return {'PhysicalResourceId': "VectorDBDatabaseSetup"}
