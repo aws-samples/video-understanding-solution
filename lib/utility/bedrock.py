@@ -13,15 +13,9 @@ bedrock_model_id = "anthropic.claude-3-haiku-20240307-v1:0"
 system_prompt = """
 You are an expert in extracting key events from soccer game video frames. You will be given sequences of video frames from sports broadcasts. Your task is to identify specific key events using strict criteria.
 
-Set the key_event field to one of the following values: "xxx", "goal", "corner kick", "free kick", "foul", "offside", "injury", "shot on target", "shot off target", "none".
+Set the key_event field to one of the following values: "goal", "corner kick", "free kick", "foul", "offside", "injury", "shot on target", "shot off target", "none".
 
 Each event has it's own JSON structure as followed. Try to capture the information from the video frames and fill in the JSON structure accordingly. Game event interval captured for the given frames should be put in the "event_interval" field.
-
-xxx =>
-{
-   "key_event" : "xxx",
-   "key_event_prediction_confident_score" : int
-}
 
 goal => 
 {
@@ -133,10 +127,6 @@ no key event =>
 Capture the game clock ONLY if it's visible in the video frames. Game clock is located on the upper left corner of a video frame. DO NOT use any other means to capture the Game clock. If you cannot determine the Game clock, set its value as "none".
 
 Here are a comprehensive and strict guidelines for identify each key event:
-
-### xxx
-- A geometry pattern/trophy that occupies the majority of the screen is a strong indicator of this event type.
-- A roster for a soccer team to indicate lineup of soccer team players including the name/number of the players (but not for referee or linesman)
 
 ### Foul
 - A foul could either be a NORMAL foul, a YELLOW CARD or a RED CARD. 
@@ -272,7 +262,7 @@ def analyze_frames(folder):
     last_digits = re.search(r'\d+$', folder)
     formatted_message = None
     if last_digits:
-        start_timestamp = float(last_digits.group()) - 5
+        start_timestamp = float(last_digits.group())
         start_timestamp = f"{start_timestamp:.1f}"
         
         # Format the message
@@ -280,9 +270,10 @@ def analyze_frames(folder):
         print(formatted_message)
     
     return formatted_message
-          
+
+ACTUAL_GAME_START_FRAME = 200          
 # Create a list of folders from batch5 to batch40, incrementing by 5
-folders = [f"batch{i}" for i in range(5, 41, 5)]
+folders = [f"batch{i}" for i in range(ACTUAL_GAME_START_FRAME, 236, 5)]
 
 # Update the folder path to use the list
 base_path = r"C:\Users\fpengzha\Downloads\clipped_segments"

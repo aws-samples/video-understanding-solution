@@ -1,0 +1,8 @@
+45,50: 
+
+foul: LLM see three referees or linesmen wearing turquoise shirts and black shorts, which is the typical uniform for referees and linesmen.
+Additionally, in one of the frames, I can see a player in a white jersey (likely from the FC Bayern team) interacting with one of the referees. This suggests that a foul has been called.
+
+Actual: this is actually the opening part to kick off the game.
+
+Solution: ignore all the frames before the acutal game starting frame.

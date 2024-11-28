@@ -124,7 +124,7 @@ def stitch_videos(video_files, output_file):
 
 
 # Example usage:
-input_file = r"C:\Users\fpengzha\Downloads\Full Spain vs Italy _ Semi Final UEFA Nations League 22_23 (1).mp4"
+input_file = r"C:\Users\fpengzha\Downloads\Full Spain vs Italy _ Semi Final UEFA Nations League 22_23.mp4"
 segments_file = r"C:\Users\fpengzha\Downloads\segments.txt"
 output_folder = r"C:\Users\fpengzha\Downloads\segments"
 

@@ -130,7 +130,7 @@ def save_merged_segments(segments, output_file):
             
 
 # Usage
-input_file = r'C:\Users\fpengzha\Downloads\Scenes.txt'
+input_file = r'C:\Users\fpengzha\Downloads\Full_Spain_vs_Italy___Semi_Final_UEFA_Nations_League_22_23__1_.mp4 (8).txt'
 output_file = r'C:\Users\fpengzha\Downloads\segments.txt'
 
 segments = read_and_process_scenes(input_file)
