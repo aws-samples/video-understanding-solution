@@ -66,6 +66,7 @@ The `make prepare` utility is currently supported only for MacOS Ventura, Amazon
 
 At the moment,this solution can only be used in AWS regions where Amazon Bedrock is available.
 At the time of the writing of this document, you can deploy and use this in us-east-1 (N. Virginia) and us-west-2 (Oregon) regions.
+If you run Deploy on Windows, recommend to use Git Bash.
 
 Follow the steps below for deploying this solution from your current environment
 
