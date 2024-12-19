@@ -74,11 +74,11 @@ nvm use 20.10.0
 rm /tmp/nvm_install.sh
 
 node -e "console.log('Currently running Node.js ' + process.version)"
-npm install -g aws-cdk@">=2.171.0"
-npm install -g @aws-cdk/aws-amplify-alpha@">=2.171.0-alpha.0"
+npm install -g aws-cdk@">=2.173.1"
+npm install -g @aws-cdk/aws-amplify-alpha@">=2.173.1-alpha.0"
 
 python3 -m pip install --upgrade pip
-python3 -m pip install --upgrade "aws-cdk-lib>=2.171.0"
+python3 -m pip install --upgrade "aws-cdk-lib>=2.173.1"
 python3 -m pip install --upgrade "aws-cdk.aws-amplify-alpha"
 python3 -m pip install --upgrade "cdk-nag>=2.34.8"
 

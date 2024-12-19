@@ -11,11 +11,16 @@ import base64
 from PIL import Image
 import concurrent.futures
 from multiprocessing import Pool
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(threadName)s - %(message)s')
 
 CONFIG_LABEL_DETECTION_ENABLED = "label_detection_enabled"
 CONFIG_TRANSCRIPTION_ENABLED = "transcription_enabled"
 
 secrets_manager = boto3.client('secretsmanager')
+ssm = boto3.client('ssm')
 
 model_id = os.environ["MODEL_ID"]
 vqa_model_id = os.environ["VQA_MODEL_ID"]
@@ -43,6 +48,7 @@ label_detection_job_id = os.environ['LABEL_DETECTION_JOB_ID']
 label_detection_enabled = True if os.environ[CONFIG_LABEL_DETECTION_ENABLED] == "1" else False
 transcription_enabled = True if os.environ[CONFIG_TRANSCRIPTION_ENABLED] == "1" else False
 
+ssm_parameter_name = os.environ['CONFIG_PARAMETER_NAME']
 
 credentials = json.loads(secrets_manager.get_secret_value(SecretId=secret_name)["SecretString"])
 username = credentials["username"]
@@ -63,10 +69,6 @@ class CelebrityFinding():
     def __init__(self, celebrity_dict: dict):
         self.name: str = celebrity_dict['Name']
         self.match_confidence: int = int(celebrity_dict['MatchConfidence'])
-        # These emotion related attributes were disabled on July 29, 2024 to respect this AUP https://www.anthropic.com/legal/aup
-        #self.smile: bool = bool(celebrity_dict['Face']['Smile']['Value'])
-        #self.smile_confidence: int = int(celebrity_dict['Face']['Smile']['Confidence'])
-        #self.emotions: list[str] = list(filter(lambda em: (len(em) > 0),[emo['Type'].lower() if int(emo['Confidence']) >= self.celebrity_emotion_confidence_threshold else '' for emo in celebrity_dict['Face']['Emotions']]))
         self.top: float = float(celebrity_dict['Face']['BoundingBox']['Top'])
         self.top_display: str = str(round(self.top, 2))
         self.left: float = float(celebrity_dict['Face']['BoundingBox']['Left'])
@@ -86,11 +88,6 @@ class CelebrityFinding():
 
     def display(self) -> str:
         display_string = f"Name is {self.name}. "
-        # These emotion related attributes were disabled on July 29, 2024 to respect this AUP https://www.anthropic.com/legal/aup
-        #if len(self.emotions) > 0:
-        #    display_string += "Emotions appear to be " + ", ".join(self.emotions) + ". "
-        #if self.smile_confidence >= self.celebrity_feature_confidence_threshold: 
-        #    display_string += "The celebrity is smiling. " if self.smile else "The celebrity is not smiling at this moment. "
         display_string += f"The celeb's face is located at {self.left_display} of frame's width from left and {self.top_display} of frame's height from top, with face height of {self.height_display} of frame's height and face width of {self.width_display} of the frame's width. "
 
         return display_string
@@ -121,17 +118,12 @@ class FaceFinding():
         self.eyesopen_confidence: int = int(face_dict['EyesOpen']['Confidence'])
         self.sunglasses: bool = bool(face_dict['Sunglasses']['Value'])
         self.sunglasses_confidence: int = int(face_dict['Sunglasses']['Confidence'])
-        # These emotion related attributes were disabled on July 29, 2024 to respect this AUP https://www.anthropic.com/legal/aup
-        #self.smile: bool = bool(face_dict['Smile']['Value'])
-        #self.smile_confidence: int = int(face_dict['Smile']['Confidence'])
         self.mouthopen: bool = bool(face_dict['MouthOpen']['Value'])
         self.mouthopen_confidence: int = int(face_dict['MouthOpen']['Confidence'])
         self.mustache: bool = bool(face_dict['Mustache']['Value'])
         self.mustache_confidence: int = int(face_dict['Mustache']['Confidence'])
         self.gender: str = str(face_dict['Gender']['Value']).lower()
         self.gender_confidence: int = int(face_dict['Gender']['Confidence'])
-        # This emotion related attributes were disabled on July 29, 2024 to respect this AUP https://www.anthropic.com/legal/aup
-        #self.emotions: list[str] = list(filter(lambda em: (len(em) > 0),[emo['Type'].lower() if int(emo['Confidence']) >= self.face_emotion_confidence_threshold else '' for emo in face_dict['Emotions']]))
 
     def is_duplicate(self, face_list: list[Self]) -> bool:
         found = False
@@ -144,11 +136,6 @@ class FaceFinding():
         display_string = f"The person is about {self.age_low} to {self.age_high} years old. "
         if self.gender_confidence >= self.face_feature_confidence_threshold:
             display_string += f"Identifed gender is {self.gender}. "
-        # These emotion related attributes were disabled on July 29, 2024 to respect this AUP https://www.anthropic.com/legal/aup
-        #if len(self.emotions) > 0:
-        #    display_string += "Emotion appears to be " + ", ".join(self.emotions) + ". "
-        #if self.smile_confidence >= self.face_feature_confidence_threshold:
-        #    display_string += "Seems to be smiling. " if self.smile else "Seems to be not smiling. "
         if self.beard_confidence >= self.face_feature_confidence_threshold:
             display_string += "Person has beard. " if self.beard else "Person has no beard. "
         if self.mustache_confidence >= self.face_feature_confidence_threshold:
@@ -179,6 +166,7 @@ class VideoPreprocessor(ABC):
     s3_client = boto3.client("s3")
     transcribe_client = boto3.client("transcribe")
     rekognition_client = boto3.client("rekognition")
+    bedrock_agent_client = boto3.client('bedrock-agent')
     
     def __init__(self, 
         label_detection_job_id: str,
@@ -211,10 +199,36 @@ class VideoPreprocessor(ABC):
         self.frame_bytes: list[list[Union[int, bytes]]] = []
         self.person_frame_bytes: list[list[Union[int, bytes]]] = []
         self.parallel_degree = os.cpu_count()
+        self.visual_extraction_prompt_id: string = ""
+        self.visual_extraction_prompt_variant_name: string = ""
+        self.visual_extraction_prompt_version: string = ""
+        self.visual_extraction_prompt_template: dict = {}
     
     @abstractmethod
     def call_vqa(self, image_data: str) ->str:
         pass
+
+    def retrieve_config(self):
+        response = ssm.get_parameter(Name=ssm_parameter_name)
+        config = json.loads(response['Parameter']['Value'])
+        
+        # Extract prompt configuration
+        prompt_config = config.get('visual_extraction_prompt')
+        if not prompt_config:
+            raise Exception("Prompt configuration not found in parameter store")
+        
+        self.visual_extraction_prompt_id = prompt_config.get('prompt_id')
+        self.visual_extraction_prompt_variant_name = prompt_config.get('variant_name')
+        self.visual_extraction_prompt_version = prompt_config.get('version_id')
+    
+    def retrieve_prompts(self):
+        visual_extraction_prompt_variants = self.bedrock_agent_client.get_prompt(
+            promptIdentifier=self.visual_extraction_prompt_id,
+            promptVersion=self.visual_extraction_prompt_version
+        )['variants']
+        for variant in visual_extraction_prompt_variants:
+            if variant['name'] == self.visual_extraction_prompt_variant_name:
+                self.visual_extraction_prompt_template = variant['templateConfiguration']
 
     def wait_for_rekognition_label_detection(self, sort_by):
         get_object_detection = self.rekognition_client.get_label_detection(JobId=self.label_detection_job_id, SortBy=sort_by)
@@ -308,6 +322,8 @@ class VideoPreprocessor(ABC):
         timestamp_millis: int = timestamp_data[0]
         image: bytes = timestamp_data[1]
 
+        logging.info(f"Processing timestamp: {timestamp_millis}")
+
         # Call Rekognition to detect celebrity
         recognize_celebrity_response: dict = self.rekognition_client.recognize_celebrities(Image={'Bytes': image})
         celebrity_findings: list[dict] = recognize_celebrity_response["CelebrityFaces"]
@@ -352,13 +368,13 @@ class VideoPreprocessor(ABC):
 
     def detect_faces_and_celebrities(self):
         if len(self.person_timestamps_millis) == 0:
-            print("Warning: detect_faces_and_celebrities may be called before objects detection, which caused 0 'person' result")
+            logging.warning("detect_faces_and_celebrities may be called before objects detection, which caused 0 'person' result")
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.parallel_degree*15) as executor:
             executor.map(self._detect_faces_and_celebrities_at_timestamp, self.person_frame_bytes)
 
-
     def _extract_frame(self, timestamp_millis):
+        logging.info(f"Extracting frame at timestamp: {timestamp_millis}")
         video = self.load_video(self.video_filename)
         video.set(cv2.CAP_PROP_POS_MSEC, int(timestamp_millis))
         success, frame = video.read()
@@ -429,17 +445,16 @@ class VideoPreprocessor(ABC):
         timestamp_millis = frame_info[0]
         image = frame_info[1]
 
-        system_prompt = "You are an expert in extracting information from video frames. Each video frame is an image. You will extract the scene, text, and caption."
-        task_prompt =   "Extract information from this image and output a JSON with this format:\n" \
-                    "{\n" \
-                    "\"scene\" : \"String\",\n" \
-                    "\"caption\" : \"String\",\n" \
-                    "\"text\" : [\"String\", \"String\" , . . .],\n" \
-                    "}\n" \
-                    "For \"scene\", look carefully, think hard, and describe what you see in the image in detail, yet succinct. \n" \
-                    "For \"caption\", look carefully, think hard, and give a SHORT caption (3-8 words) that best describes what is happening in the image. This is intended for visually impaired ones. \n" \
-                    "For \"text\", list the text you see in that image confidently. If nothing return empty list.\n"
-        vqa_response = self.call_vqa(image_data=base64.b64encode(image).decode("utf-8"), system_prompt = system_prompt, task_prompt=task_prompt) 
+        logging.info(f"Extracting scene from VQA at timestamp: {timestamp_millis}")
+
+        try:
+            vqa_response = self.call_vqa(image_data=image)
+        except Exception as e:
+            logging(f"Error in extracting information for frame at timestamp: {timestamp_millis}")
+            logging.error(e)
+            raise e
+
+        logging.info(f"VQA response: {vqa_response}")
 
         # Sometimes the response might be censored due to false positive of inappropriate content. When that happens, just skip this frame.
         pattern = r'"scene"\s*:\s*"(.+?)".*?"caption"\s*:\s*"(.+?)".*?"text"\s*:\s*\[(.*?)\]'
@@ -454,13 +469,7 @@ class VideoPreprocessor(ABC):
                 self.visual_texts[timestamp_millis] = [t.strip().strip("\"") for t in text.replace("\n","").split(",")]
             self.visual_captions[timestamp_millis] = caption
 
-            
-
-    
     def extract_scenes_from_vqa(self):
-        timestamp_millis: int
-        image: bytes
-          
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.parallel_degree*15) as executor:
             executor.map(self._extract_scene_from_vqa, self.frame_bytes)
     
@@ -471,6 +480,8 @@ class VideoPreprocessor(ABC):
             self.wait_for_transcription_job()
 
     def run(self):
+        self.retrieve_config()
+        self.retrieve_prompts()
         self.download_video_and_load_metadata()
         if label_detection_enabled:
             self.iterate_object_detection_result()
@@ -505,38 +516,46 @@ class VideoPreprocessorBedrockVQA(VideoPreprocessor):
         )
 
         self.vqa_model_name = vqa_model_name
-        self.llm_parameters = {
-            "anthropic_version": "bedrock-2023-05-31",    
-            "max_tokens": 1000,
-            "temperature": 0.1,
-            "top_k": 3,
+        self.inferenceConfig = {  
+            "maxTokens": 2500,
+            "temperature": 0
+        }
+        self.additionalModelRequestFields = {
+            "top_k": 1
         }
     
-    def call_vqa(self, image_data: bytes, system_prompt: str, task_prompt: str) -> str:
-        self.llm_parameters["system"] = system_prompt
-        self.llm_parameters["messages"] = [
+    def call_vqa(self, image_data: bytes) -> str:
+        messages = copy.deepcopy(self.visual_extraction_prompt_template['chat']['messages'])
+        messages[0]['content'].insert(0, 
             {
-                "role": "user",
-                "content": [
-                    { "type": "image", "source": { "type": "base64", "media_type": "image/jpeg", "data": image_data } },
-                    { "type": "text", "text": task_prompt }
-                ]
+                'image': {
+                    'format': 'jpeg',
+                    'source': {
+                        'bytes': image_data
+                    }
+                }
             }
-        ]
+        )
         
-        encoded_input = json.dumps(self.llm_parameters).encode("utf-8")
         call_done = False
         while(not call_done):
             try:
-                bedrock_response = self.bedrock_client.invoke_model(body=encoded_input, modelId=self.vqa_model_name)
+                bedrock_response = self.bedrock_client.converse(
+                    modelId=self.vqa_model_name,
+                    messages=messages,
+                    inferenceConfig=self.inferenceConfig,
+                    additionalModelRequestFields=self.additionalModelRequestFields
+                )
                 call_done = True
             except self.bedrock_client.exceptions.ThrottlingException as e:
-                print("Amazon Bedrock throttling exception")
+                logging.warning("Amazon Bedrock throttling exception")
                 time.sleep(60)
             except Exception as e:
+                logging.error(f"Error calling VQA: {str(e)}")
                 raise e
 
-        response: str = json.loads(bedrock_response.get("body").read())["content"][0]["text"]
+        del messages
+        response: str = bedrock_response['output']['message']['content'][0]['text']
         return response
     
 class VideoAnalyzer(ABC):
@@ -701,7 +720,7 @@ class VideoAnalyzer(ABC):
                         transcript[time_millis] = content
                         previous_millis = time_millis
                     except Exception as e:
-                        print("Error in transcribing") 
+                        logging.error("Error in transcribing") 
                         raise e
 
         self.transcript = sorted(transcript.items())
@@ -1234,9 +1253,10 @@ class VideoAnalyzerBedrock(VideoAnalyzer):
                 bedrock_response = self.bedrock_client.invoke_model(body=encoded_input, modelId=self.model_name)
                 call_done = True
             except self.bedrock_client.exceptions.ThrottlingException as e:
-                print("Amazon Bedrock throttling exception")
+                logging.warning("Amazon Bedrock throttling exception")
                 time.sleep(60)
             except Exception as e:
+                logging.error(f"Error calling LLM: {str(e)}")
                 raise e
 
         response: str = json.loads(bedrock_response.get("body").read())["content"][0]["text"]
@@ -1254,9 +1274,10 @@ class VideoAnalyzerBedrock(VideoAnalyzer):
                 response = self.bedrock_client.invoke_model(body=body, modelId=self.embedding_model_name)
                 call_done = True
             except self.bedrock_client.exceptions.ThrottlingException:
-                print("Amazon Bedrock throttling exception")
+                logging.warning("Amazon Bedrock throttling exception")
                 time.sleep(60)
             except Exception as e:
+                logging.error(f"Error calling embedding LLM: {str(e)}")
                 raise e
 
         # Disabling semgrep rule for checking data size to be loaded to JSON as the source is from Amazon Bedrock
@@ -1312,7 +1333,7 @@ def handler():
         video_analyzer.store()
 
     except Exception as err:
-        print(f"Unexpected {err=}, {type(err)=}")
+        logging.error(f"Unexpected {err=}, {type(err)=}")
         raise
 
     return {

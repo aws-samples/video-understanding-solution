@@ -29,7 +29,7 @@ export CDK_DEPLOY_REGION=$region
 
 npm --prefix ./webui  install ./webui
 
-cd webui && find  . -name 'ui_repo*.zip' -exec rm {} \; && zip -r "ui_repo$(date +%s).zip" src package.json package-lock.json amplify.yml public && cd ..
+cd webui && find  . -name 'ui_repo*.zip' -exec rm {} \; && zip -r "ui_repo$(date +%s).zip" src package.json package-lock.json public && cd ..
 
 cdk deploy --outputs-file ./deployment-output.json --context email=$email
 

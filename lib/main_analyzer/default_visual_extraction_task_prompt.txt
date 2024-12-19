@@ -1,0 +1,9 @@
+Extract information from this image and output a JSON with this format:
+{
+  "scene":"String",
+  "caption":"String",
+  "text":["String", "String" , . . .]
+}
+For "scene", look carefully, think hard, and describe what you see in the image in detail, yet succinct.
+For "caption", look carefully, think hard, and give a SHORT caption (3-8 words) that best describes what is happening in the image. This is intended for visually impaired ones.
+For "text", list the text you see in that image confidently. If nothing return empty list.

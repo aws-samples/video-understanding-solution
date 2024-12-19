@@ -19,6 +19,7 @@ import Container from "react-bootstrap/Container";
 import Row from "react-bootstrap/Row";
 import Col from "react-bootstrap/Col";
 import Navbar from "react-bootstrap/Navbar";
+import { useEffect, useState } from "react";
 
 Amplify.configure({
   Auth: {
@@ -33,12 +34,15 @@ const REGION = awsExports.aws_cognito_region;
 const COGNITO_ID = `cognito-idp.${REGION}.amazonaws.com/${awsExports.aws_user_pools_id}`;
 
 function App({ signOut, user }: WithAuthenticatorProps) {
+  const [s3Client, setS3Client] = useState(null);
+  const [bedrockClient, setBedrockClient] = useState(null);
+  const [tokens, setTokens] = useState(null);
+
   const getTs = async () => {
     return (await fetchAuthSession()).tokens;
   }
 
   const getCredentials = async (ts) => {
-    //const t = (await fetchAuthSession()).tokens;
     let idT = (await ts).idToken.toString();
 
     const cognitoidentity = new CognitoIdentityClient({
@@ -53,17 +57,31 @@ function App({ signOut, user }: WithAuthenticatorProps) {
     return await cognitoidentity.config.credentials();
   };
 
-  const ts = getTs();
-  const crs = getCredentials(ts);
-  const s3Client = new S3Client({
-    region: REGION,
-    credentials: crs,
-  });
+  useEffect(() => {
+    const initializeClients = async () => {
+      const ts = await getTs();
+      const crs = await getCredentials(ts);
+      
+      setTokens(ts);
+      
+      setS3Client(new S3Client({
+        region: REGION,
+        credentials: crs,
+      }));
 
-  const bedrockClient = new BedrockRuntimeClient({
-    region: REGION,
-    credentials: crs,
-  });
+      setBedrockClient(new BedrockRuntimeClient({
+        region: REGION,
+        credentials: crs,
+      }));
+    };
+
+    initializeClients();
+    const interval = setInterval(initializeClients, 3300000); // Refresh every 55 minutes
+
+    return () => clearInterval(interval);
+  }, []);
+
+  if (!s3Client || !bedrockClient || !tokens) return (<div>Loading...</div>)
 
   return (
     <div className="App" user={user} key="app-root">
@@ -106,7 +124,7 @@ function App({ signOut, user }: WithAuthenticatorProps) {
                   transcriptionFolder={awsExports.transcription_folder}
                   restApiUrl={awsExports.rest_api_url}
                   videosApiResource={awsExports.videos_api_resource}
-                  cognitoTs={ts}
+                  cognitoTs={tokens}
                 ></VideoTable>
               </Col>
             </Row>

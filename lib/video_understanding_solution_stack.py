@@ -1,4 +1,4 @@
-import os, json, time
+import os, json, time, base64
 from aws_cdk import (
     # Duration,
     Stack,
@@ -24,6 +24,7 @@ from aws_cdk import (
     aws_codepipeline_actions as _codepipeline_actions,
     aws_amplify_alpha as _amplify,
     aws_cognito as _cognito,
+    aws_bedrock as _bedrock,
     aws_secretsmanager as _secretsmanager,
     custom_resources as _custom_resources,
     Duration, CfnOutput, BundlingOptions, RemovalPolicy, CustomResource, Aspects, Size
@@ -32,6 +33,7 @@ from constructs import Construct
 from aws_cdk.custom_resources import Provider
 from aws_cdk.aws_ecr_assets import DockerImageAsset
 from cdk_nag import AwsSolutionsChecks, NagSuppressions
+
 
 
 model_id = "anthropic.claude-3-sonnet-20240229-v1:0"
@@ -55,10 +57,19 @@ embedding_dimension = 1024
 video_search_by_summary_acceptable_embedding_distance = 0.50 # Using cosine distance
 videos_api_resource = "videos"
 visual_objects_detection_confidence_threshold = 30.0
+visual_extraction_prompt_name = "vus-visual-extraction-prompt"
+visual_extraction_prompt_variant_name = "claude3"
+visual_extraction_prompt_version_description = "Default version"
 
 BASE_DIR = os.getcwd()
 CONFIG_LABEL_DETECTION_ENABLED = "label_detection_enabled" # Value is "1" or "0"
 CONFIG_TRANSCRIPTION_ENABLED = "transcription_enabled" # Value is "1" or "0"
+CONFIG_VISUAL_EXTRACTION_PROMPT = "visual_extraction_prompt" # Value is a JSON
+
+with open('./lib//main_analyzer/default_visual_extraction_system_prompt.txt', 'r') as file:
+    default_visual_extraction_system_prompt = file.read()
+with open('./lib/main_analyzer/default_visual_extraction_task_prompt.txt', 'r') as file:
+    default_visual_extraction_task_prompt = file.read()
 
 class VideoUnderstandingSolutionStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
@@ -103,14 +114,18 @@ class VideoUnderstandingSolutionStack(Stack):
         # Parameter store for storing application configuration
         default_configuration_parameters = {
             CONFIG_LABEL_DETECTION_ENABLED: "1",
-            CONFIG_TRANSCRIPTION_ENABLED: "1"
+            CONFIG_TRANSCRIPTION_ENABLED: "1",
+            CONFIG_VISUAL_EXTRACTION_PROMPT: {
+                "prompt_id": "",  # Will be updated by custom resource
+                "variant_name": "claude3",  # Default variant
+                "version_id": ""  # Will be updated by custom resource
+            }
         }
         default_configuration_parameters_json = json.dumps(default_configuration_parameters)
         configuration_parameters_ssm = _ssm.StringParameter(self, f"{construct_id}-configuration-parameters",
             parameter_name = f"{construct_id}-configuration",
             string_value = default_configuration_parameters_json
         )
-
 
         # S3 - Video bucket
         video_bucket_s3 = _s3.Bucket(
@@ -164,6 +179,94 @@ class VideoUnderstandingSolutionStack(Stack):
             { "id": 'AwsSolutions-IAM4', "reason": 'Allow using AWSLambdaBasicExecutionRole managed role/policy'},
             { "id": 'AwsSolutions-IAM5', "reason": 'Allow using <arn>* in the policy since video file names can vary'}
         ], True)
+
+        # Prompt storage infrastructure
+        prompt_setup_role = _iam.Role(
+            id="PromptSetupRole",
+            scope=self,
+            role_name=f"{construct_id}-{aws_region}-prompt-setup",
+            assumed_by=_iam.ServicePrincipal("lambda.amazonaws.com"),
+            inline_policies={
+                "PromptSetupPolicy": _iam.PolicyDocument(
+                    statements=[
+                        _iam.PolicyStatement(
+                            actions=[
+                                "bedrock:CreatePrompt",
+                                "bedrock:DeletePrompt",
+                                "bedrock:CreatePromptVersion"
+                            ],
+                            resources=["*"],
+                            effect=_iam.Effect.ALLOW,
+                        ),
+                        _iam.PolicyStatement(
+                            actions=[
+                                "ssm:GetParameter",
+                                "ssm:PutParameter"
+                            ],
+                            resources=[configuration_parameters_ssm.parameter_arn],
+                            effect=_iam.Effect.ALLOW,
+                        )
+                    ]
+                )
+            },
+            managed_policies=[
+                _iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "service-role/AWSLambdaBasicExecutionRole"
+                )
+            ],
+        )
+
+        NagSuppressions.add_resource_suppressions(prompt_setup_role, [
+            { "id": 'AwsSolutions-IAM4', "reason": 'Allow using AWSLambdaBasicExecutionRole managed role'},
+            { "id": 'AwsSolutions-IAM5', "reason": 'Allow using * for Bedrock prompt management APIs'}
+        ], True)
+
+        prompt_setup_lambda = _lambda.Function(
+            scope=self,
+            id="PromptSetupLambda",
+            function_name=f"{construct_id}-prompt-setup",
+            runtime=_lambda.Runtime.PYTHON_3_13,
+            code=_lambda.Code.from_asset("./lib/prompt_setup_lambda",
+                bundling= BundlingOptions(
+                    image= _lambda.Runtime.PYTHON_3_13.bundling_image,
+                    command= [
+                        'bash',
+                        '-c',
+                        'pip install --platform manylinux2014_x86_64 --only-binary=:all: -r requirements.txt -t /asset-output && cp -au . /asset-output',
+                    ],
+                )
+            ),
+            handler="index.on_event",
+            role=prompt_setup_role,
+            timeout=Duration.minutes(5),
+        )
+
+        prompt_setup_provider = Provider(
+            scope=self,
+            id="PromptSetupProvider",
+            on_event_handler=prompt_setup_lambda,
+        )
+
+        NagSuppressions.add_resource_suppressions(prompt_setup_provider, [
+            { "id": 'AwsSolutions-L1', "reason": "The Lambda function's runtime is managed by CDK Provider. Solution is to update CDK version."},
+            { "id": 'AwsSolutions-IAM4', "reason": 'The Lambda function is managed by Provider'},
+            { "id": 'AwsSolutions-IAM5', "reason": 'The Lambda function is managed by Provider.'}
+        ], True)
+
+        prompt_setup_custom_resource = CustomResource(
+            scope=self,
+            id="PromptSetup",
+            service_token=prompt_setup_provider.service_token,
+            properties={
+                "visual_extraction_prompt_name": visual_extraction_prompt_name,
+                "visual_extraction_prompt_version_description": visual_extraction_prompt_version_description,
+                "visual_extraction_prompt_description": "The system prompt used to instruct the model to extract information from the video frames",
+                "visual_extraction_prompt_variant_name": visual_extraction_prompt_variant_name,
+                "visual_extraction_system_prompt_text": base64.b64encode(default_visual_extraction_system_prompt.encode('utf-8')).decode('utf-8'),
+                "visual_extraction_task_prompt_text": base64.b64encode(default_visual_extraction_task_prompt.encode('utf-8')).decode('utf-8'),
+                "configuration_parameter_name": configuration_parameters_ssm.parameter_name
+            }
+        )
 
         # Subnet group
         db_subnet_group = _rds.SubnetGroup(self, f"DBSubnetGroup",
@@ -261,7 +364,7 @@ class VideoUnderstandingSolutionStack(Stack):
         db_setup_event_handler = _lambda.Function(self, "DatabaseSetupHandler",
             function_name=f"{construct_id}-DatabaseSetupHandler",
             runtime=_lambda.Runtime.PYTHON_3_13,
-            timeout=Duration.minutes(1),
+            timeout=Duration.minutes(15),
             code=_lambda.Code.from_asset('./lib/db_setup_lambda',
                 bundling= BundlingOptions(
                   image= _lambda.Runtime.PYTHON_3_13.bundling_image,
@@ -372,8 +475,8 @@ class VideoUnderstandingSolutionStack(Stack):
                     ],
                 )),
             role=preprocessing_lambda_role,                                    
-            timeout=Duration.minutes(3),
-            memory_size=256,
+            timeout=Duration.minutes(5),
+            memory_size=128,
             vpc=vpc,
             vpc_subnets=private_with_egress_subnets,
             environment = {
@@ -384,6 +487,19 @@ class VideoUnderstandingSolutionStack(Stack):
                 'CONFIGURATION_PARAMETER_NAME': configuration_parameters_ssm.parameter_name,
                 'EMBEDDING_DIMENSION': str(embedding_dimension)
             }
+        )
+        # Add provisioned concurrency configuration
+        preprocessing_lambda_version = preprocessing_lambda.current_version
+        preprocessing_lambda_alias = _lambda.Alias(
+            self,
+            "PreprocessingLambdaAlias",
+            alias_name="dev",
+            version=preprocessing_lambda_version
+        )
+        # Configure provisioned concurrency
+        preprocessing_lambda_alias.add_auto_scaling(
+            min_capacity=1,
+            max_capacity=1
         )
 
         preprocessing_task = _sfn_tasks.LambdaInvoke(self, "CallPreprocessingLambda",
@@ -564,6 +680,11 @@ class VideoUnderstandingSolutionStack(Stack):
                             effect=_iam.Effect.ALLOW,
                         ),
                         _iam.PolicyStatement(
+                            actions=["bedrock:GetPrompt"],
+                            resources=[f"*"],
+                            effect=_iam.Effect.ALLOW,
+                        ),
+                        _iam.PolicyStatement(
                             actions=["rekognition:GetLabelDetection", "rekognition:GetTextDetection", "rekognition:RecognizeCelebrities", "rekognition:DetectFaces"],
                             resources=["*"],
                             effect=_iam.Effect.ALLOW,
@@ -597,6 +718,11 @@ class VideoUnderstandingSolutionStack(Stack):
                             resources=[aurora_cluster_secret.secret_full_arn],
                             effect=_iam.Effect.ALLOW,
                         ),
+                        _iam.PolicyStatement(
+                            actions=["ssm:GetParameter"],
+                            resources=[configuration_parameters_ssm.parameter_arn],
+                            effect=_iam.Effect.ALLOW,
+                        )
                     ]
                 )
             },
@@ -665,6 +791,7 @@ class VideoUnderstandingSolutionStack(Stack):
                     _sfn_tasks.TaskEnvironmentVariable(name="TRANSCRIPTION_JOB_NAME", value=_sfn.JsonPath.string_at("$[1].transcriptionResult.TranscriptionJobName")),
                     _sfn_tasks.TaskEnvironmentVariable(name=CONFIG_LABEL_DETECTION_ENABLED, value=_sfn.JsonPath.string_at(f"$[0].preprocessingResult.Payload.body.{CONFIG_LABEL_DETECTION_ENABLED}")),
                     _sfn_tasks.TaskEnvironmentVariable(name=CONFIG_TRANSCRIPTION_ENABLED, value=_sfn.JsonPath.string_at(f"$[0].preprocessingResult.Payload.body.{CONFIG_TRANSCRIPTION_ENABLED}")),
+                    _sfn_tasks.TaskEnvironmentVariable(name='CONFIG_PARAMETER_NAME', value= configuration_parameters_ssm.parameter_name),
                     _sfn_tasks.TaskEnvironmentVariable(name='DATABASE_NAME', value= database_name),
                     _sfn_tasks.TaskEnvironmentVariable(name='VIDEO_TABLE_NAME', value= video_table_name),
                     _sfn_tasks.TaskEnvironmentVariable(name='ENTITIES_TABLE_NAME', value= entities_table_name),
@@ -682,11 +809,10 @@ class VideoUnderstandingSolutionStack(Stack):
                     _sfn_tasks.TaskEnvironmentVariable(name="ENTITY_SENTIMENT_FOLDER", value= entity_sentiment_folder),
                     _sfn_tasks.TaskEnvironmentVariable(name="SUMMARY_FOLDER", value= summary_folder),
                     _sfn_tasks.TaskEnvironmentVariable(name="VIDEO_CAPTION_FOLDER", value= video_caption_folder),
-                    _sfn_tasks.TaskEnvironmentVariable(name='FRAME_INTERVAL', value= frame_interval),
+                    _sfn_tasks.TaskEnvironmentVariable(name='FRAME_INTERVAL', value= frame_interval)
                 ]
             )],
         )
-        
         # Chain the analysis step after the parallel step
         parallel_sfn.next(main_analyzer_task)
 
@@ -954,6 +1080,7 @@ class VideoUnderstandingSolutionStack(Stack):
             vpc=vpc,
             vpc_subnets=private_with_egress_subnets,
             timeout=Duration.minutes(2),
+            memory_size=128,
             environment = {
                     'DB_READER_ENDPOINT': self.db_reader_endpoint.hostname,
                     'SECRET_NAME': self.db_secret_name,
@@ -964,6 +1091,19 @@ class VideoUnderstandingSolutionStack(Stack):
                     'ACCEPTABLE_EMBEDDING_DISTANCE': str(video_search_by_summary_acceptable_embedding_distance),
                     'DISPLAY_PAGE_SIZE': str(25)
             }
+        )
+        # Add provisioned concurrency configuration
+        videos_search_version = videos_search_function.current_version
+        videos_search_alias = _lambda.Alias(
+            self,
+            "VideoSearchLambdaAlias",
+            alias_name="dev",
+            version=videos_search_version
+        )
+        # Configure provisioned concurrency
+        videos_search_alias.add_auto_scaling(
+            min_capacity=1,
+            max_capacity=1
         )
 
         # Suppress CDK nag rule for using * in IAM policy since for flexibility in choosing Bedrock model and for calling routes in API Gateway WebSocket APIs

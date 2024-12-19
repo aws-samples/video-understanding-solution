@@ -25,7 +25,7 @@ echo $region > .DEFAULT_REGION
 
 npm --prefix ./webui  install ./webui
 
-cd webui && find  . -name 'ui_repo*.zip' -exec rm {} \; && zip -r "ui_repo$(date +%s).zip" src package.json package-lock.json amplify.yml public && cd ..
+cd webui && find  . -name 'ui_repo*.zip' -exec rm {} \; && zip -r "ui_repo$(date +%s).zip" src package.json package-lock.json public && cd ..
 
 cdk bootstrap aws://${account}/${region} --context environment=$environment
 
