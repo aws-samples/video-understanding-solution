@@ -322,8 +322,6 @@ class VideoPreprocessor(ABC):
         timestamp_millis: int = timestamp_data[0]
         image: bytes = timestamp_data[1]
 
-        logging.info(f"Processing timestamp: {timestamp_millis}")
-
         # Call Rekognition to detect celebrity
         recognize_celebrity_response: dict = self.rekognition_client.recognize_celebrities(Image={'Bytes': image})
         celebrity_findings: list[dict] = recognize_celebrity_response["CelebrityFaces"]
@@ -453,8 +451,6 @@ class VideoPreprocessor(ABC):
             logging(f"Error in extracting information for frame at timestamp: {timestamp_millis}")
             logging.error(e)
             raise e
-
-        logging.info(f"VQA response: {vqa_response}")
 
         # Sometimes the response might be censored due to false positive of inappropriate content. When that happens, just skip this frame.
         pattern = r'"scene"\s*:\s*"(.+?)".*?"caption"\s*:\s*"(.+?)".*?"text"\s*:\s*\[(.*?)\]'
